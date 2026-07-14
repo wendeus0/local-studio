@@ -138,3 +138,51 @@ test("Pi model refresh pulls and writes models from every configured controller"
     rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+test("Pi model refresh returns reachable controllers when one times out", async () => {
+  const previousDataDir = process.env.LOCAL_STUDIO_DATA_DIR;
+  const previousHome = process.env.HOME;
+  const previousFetch = globalThis.fetch;
+  const dataDir = mkdtempSync(path.join(tmpdir(), "local-studio-pi-model-timeout-"));
+
+  process.env.LOCAL_STUDIO_DATA_DIR = dataDir;
+  process.env.HOME = dataDir;
+  writeFileSync(
+    path.join(dataDir, "api-settings.json"),
+    JSON.stringify({
+      backendUrl: "http://offline.test:8080",
+      apiKey: "",
+      voiceUrl: "",
+      voiceModel: "whisper-large-v3-turbo",
+    }),
+    "utf8",
+  );
+  mkdirSync(path.join(dataDir, "pi-agent"));
+  writeFileSync(
+    path.join(dataDir, "pi-agent", "controllers.json"),
+    JSON.stringify([{ url: "http://reachable.test:11434", name: "reachable" }]),
+    "utf8",
+  );
+
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.startsWith("http://offline.test:8080")) {
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
+    }
+    return Response.json({ object: "list", data: [{ id: "qwen2.5:3b" }] });
+  };
+
+  try {
+    const result = await refreshPiModels();
+    assert.deepEqual(result.models.map((model) => model.rawId), ["qwen2.5:3b"]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousDataDir === undefined) delete process.env.LOCAL_STUDIO_DATA_DIR;
+    else process.env.LOCAL_STUDIO_DATA_DIR = previousDataDir;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
