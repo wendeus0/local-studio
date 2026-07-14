@@ -15,6 +15,7 @@ import { buildCompatibilityReport } from "./platform/compatibility-report";
 import { registerMonitoringRoutes } from "./metrics-routes";
 import { registerLogsRoutes } from "./logs-routes";
 import { registerUsageRoutes } from "./usage-routes";
+import { getRemoteTelemetry } from "./remote-telemetry";
 const SYSTEM_SERVICE_CHECK_HOST = "127.0.0.1";
 const SYSTEM_COMPAT_SERVICE_CHECK_TIMEOUT_MS = 500;
 const SYSTEM_DEFAULT_SERVICE_CHECK_TIMEOUT_MS = 1_000;
@@ -93,7 +94,8 @@ export const registerSystemRoutes: RouteRegistrar = (app, context) => {
   });
 
   app.get("/gpus", async (ctx) => {
-    const gpus = getGpuInfo();
+    const remote = await getRemoteTelemetry(context);
+    const gpus = remote?.gpus.length ? remote.gpus : getGpuInfo();
     return ctx.json({
       count: gpus.length,
       gpus,

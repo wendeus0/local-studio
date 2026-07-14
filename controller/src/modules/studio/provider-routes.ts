@@ -7,6 +7,7 @@ type ProviderView = {
   id: string;
   name: string;
   base_url: string;
+  metrics_url?: string;
   enabled: boolean;
   has_api_key: boolean;
 };
@@ -15,6 +16,7 @@ const serializeProvider = (p: ProviderConfig): ProviderView => ({
   id: p.id,
   name: p.name,
   base_url: p.base_url,
+  ...(p.metrics_url ? { metrics_url: p.metrics_url } : {}),
   enabled: p.enabled,
   has_api_key: Boolean(p.api_key),
 });
@@ -39,6 +41,7 @@ export const registerStudioProviderRoutes: RouteRegistrar = (app, context) => {
     const id = typeof body["id"] === "string" ? body["id"].trim().toLowerCase() : "";
     const name = typeof body["name"] === "string" ? body["name"].trim() : "";
     const baseUrl = typeof body["base_url"] === "string" ? body["base_url"].trim() : "";
+    const metricsUrl = typeof body["metrics_url"] === "string" ? body["metrics_url"].trim() : "";
     const apiKey = typeof body["api_key"] === "string" ? body["api_key"].trim() : "";
     const enabled = typeof body["enabled"] === "boolean" ? body["enabled"] : true;
 
@@ -49,7 +52,14 @@ export const registerStudioProviderRoutes: RouteRegistrar = (app, context) => {
     const existing = context.config.providers.find((p) => p.id === id);
     if (existing) throw badRequest(`Provider "${id}" already exists`);
 
-    const provider: ProviderConfig = { id, name, base_url: baseUrl, api_key: apiKey, enabled };
+    const provider: ProviderConfig = {
+      id,
+      name,
+      base_url: baseUrl,
+      ...(metricsUrl ? { metrics_url: metricsUrl } : {}),
+      api_key: apiKey,
+      enabled,
+    };
     saveProviders(context, [...context.config.providers, provider]);
 
     return ctx.json({ success: true, provider: serializeProvider(provider) });
@@ -68,6 +78,8 @@ export const registerStudioProviderRoutes: RouteRegistrar = (app, context) => {
     const name = typeof body["name"] === "string" ? body["name"].trim() : current.name;
     const baseUrl =
       typeof body["base_url"] === "string" ? body["base_url"].trim() : current.base_url;
+    const metricsUrl =
+      typeof body["metrics_url"] === "string" ? body["metrics_url"].trim() : current.metrics_url;
     const apiKey = typeof body["api_key"] === "string" ? body["api_key"].trim() : current.api_key;
     const enabled = typeof body["enabled"] === "boolean" ? body["enabled"] : current.enabled;
 
@@ -75,6 +87,7 @@ export const registerStudioProviderRoutes: RouteRegistrar = (app, context) => {
       id: providerId,
       name,
       base_url: baseUrl,
+      ...(metricsUrl ? { metrics_url: metricsUrl } : {}),
       api_key: apiKey,
       enabled,
     };
