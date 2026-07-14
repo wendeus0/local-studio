@@ -3,7 +3,8 @@ import { hostname } from "node:os";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import type { RouteRegistrar } from "../../http/route-registrar";
-import type { SystemConfigResponse } from "../models/types";
+import type { ProcessInfo, SystemConfigResponse } from "../models/types";
+import type { AppContext } from "../../app-context";
 import { badRequest, notFound } from "../../core/errors";
 import { parseJsonObjectBody } from "../../core/validation";
 import { findObservedInferenceProcess } from "../../core/function-observability";
@@ -17,6 +18,44 @@ import { registerUsageRoutes } from "./usage-routes";
 const SYSTEM_SERVICE_CHECK_HOST = "127.0.0.1";
 const SYSTEM_COMPAT_SERVICE_CHECK_TIMEOUT_MS = 500;
 const SYSTEM_DEFAULT_SERVICE_CHECK_TIMEOUT_MS = 1_000;
+
+const remoteProcess = async (context: AppContext): Promise<ProcessInfo | null> => {
+  const providers = context.config.providers.filter((provider) => provider.enabled);
+  const responses = await Promise.all(
+    providers.map(async (provider) => {
+      try {
+        const response = await fetch(`${provider.base_url.replace(/\/+$/, "")}/api/ps`, {
+          signal: AbortSignal.timeout(SYSTEM_DEFAULT_SERVICE_CHECK_TIMEOUT_MS),
+        });
+        if (!response.ok) return null;
+        const payload = (await response.json()) as {
+          models?: Array<{ name?: unknown; model?: unknown }>;
+        };
+        const model = payload.models?.find(
+          (entry) => typeof entry.name === "string" || typeof entry.model === "string",
+        );
+        const modelName =
+          typeof model?.name === "string"
+            ? model.name
+            : typeof model?.model === "string"
+              ? model.model
+              : null;
+        if (!modelName) return null;
+        const url = new URL(provider.base_url);
+        return {
+          pid: 0,
+          backend: "unknown" as const,
+          model_path: `${provider.id}/${modelName}`,
+          port: Number(url.port) || (url.protocol === "https:" ? 443 : 80),
+          served_model_name: `${provider.id}/${modelName}`,
+        };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return responses.find((process) => process !== null) ?? null;
+};
 
 export const registerSystemRoutes: RouteRegistrar = (app, context) => {
   const checkService = (
@@ -43,9 +82,10 @@ export const registerSystemRoutes: RouteRegistrar = (app, context) => {
 
   app.get("/status", async (ctx) => {
     const current = await findObservedInferenceProcess(context, "status");
+    const remote = current ? null : await remoteProcess(context);
     return ctx.json({
-      running: Boolean(current),
-      process: current,
+      running: Boolean(current ?? remote),
+      process: current ?? remote,
       inference_port: context.config.inference_port,
       launching: context.launchState.getLaunchingRecipeId(),
       launch_failures: context.launchFailureBudget.listActive(),
