@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import type { RouteRegistrar } from "../../http/route-registrar";
 import type { Recipe } from "../models/types";
+import type { ProviderConfig } from "../../config/persisted-config";
 
 /**
  * OpenAI-compatible model info.
@@ -40,6 +41,42 @@ function recipeMetadata(recipe: Recipe): Record<string, unknown> | undefined {
     return undefined;
   }
   return metadata as Record<string, unknown>;
+}
+
+async function providerModels(
+  providers: ProviderConfig[],
+  created: number,
+): Promise<OpenAIModelInfo[]> {
+  const responses = await Promise.all(
+    providers
+      .filter((provider) => provider.enabled)
+      .map(async (provider) => {
+        try {
+          const response = await fetch(`${provider.base_url.replace(/\/+$/, "")}/v1/models`, {
+            ...(provider.api_key ? { headers: { Authorization: `Bearer ${provider.api_key}` } } : {}),
+            signal: AbortSignal.timeout(5_000),
+          });
+          if (!response.ok) return [];
+          const payload = (await response.json()) as { data?: Array<{ id?: unknown }> };
+          return (payload.data ?? []).flatMap((model) =>
+            typeof model.id === "string" && model.id.trim()
+              ? [
+                  {
+                    id: `${provider.id}/${model.id}`,
+                    object: "model" as const,
+                    created,
+                    owned_by: provider.id,
+                    active: true,
+                  },
+                ]
+              : [],
+          );
+        } catch {
+          return [];
+        }
+      }),
+  );
+  return responses.flat();
 }
 
 export const registerModelsRoutes: RouteRegistrar = (app, context) => {
@@ -111,6 +148,7 @@ export const registerModelsRoutes: RouteRegistrar = (app, context) => {
       });
     }
 
+    models.push(...(await providerModels(context.config.providers, now)));
     const payload: OpenAIModelList = { object: "list", data: models };
     return ctx.json(payload);
   });

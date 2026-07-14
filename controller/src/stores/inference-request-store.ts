@@ -121,14 +121,11 @@ export class InferenceRequestStore {
   }
 
   /**
-   * Aggregate stats over all rows whose `model` is in `knownModels`. If
-   * the set is empty/undefined, no rows match (returns null) — caller is
-   * expected to skip in that case.
-   * @param knownModels - Recipe-managed model names to include.
+   * Aggregate stats over all rows, optionally restricting to `knownModels`.
+   * @param knownModels - Model names to include when a filtered aggregate is needed.
    * @returns Aggregated usage payload or null when no rows match.
    */
-  public aggregate(knownModels: ReadonlySet<string>): UsageAggregate | null {
-    if (!knownModels || knownModels.size === 0) return null;
+  public aggregate(knownModels?: ReadonlySet<string>): UsageAggregate | null {
     const filter = buildModelFilter(knownModels);
     const params = filter.params;
 
