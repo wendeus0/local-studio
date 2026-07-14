@@ -42,6 +42,7 @@ import { piResourceDiagnostics, piRuntimeManager } from "../pi-runtime";
 import { isAgentEndEvent } from "../pi-runtime-state";
 import type { LoggedPiEvent, PiAgentSession, PiAgentStatus } from "../pi-runtime-types";
 import { listSessions } from "../sessions-store";
+import { getPiSessionUsage, listPiSessionLogs, loadPiSessionLog } from "../pi-session-telemetry";
 import { errorMessage, jsonError } from "./helpers";
 import {
   initialRuntimeStatusPhase,
@@ -359,6 +360,23 @@ export function handleRuntimeSessions(): Response {
       .listSessions()
       .map(({ sessionId, session }) => ({ sessionId, status: session.status })),
   });
+}
+
+export async function handleRuntimeUsage(): Promise<Response> {
+  return Response.json(await getPiSessionUsage());
+}
+
+export async function handleRuntimeLogs(): Promise<Response> {
+  return Response.json({ sessions: await listPiSessionLogs() });
+}
+
+export async function handleRuntimeLog(request: Request, sessionId: string): Promise<Response> {
+  const url = new URL(request.url);
+  const cwd = url.searchParams.get("cwd")?.trim() ?? "";
+  const limitValue = Number.parseInt(url.searchParams.get("limit") ?? "2000", 10);
+  if (!cwd) return jsonError("cwd is required");
+  const limit = Number.isFinite(limitValue) && limitValue > 0 ? limitValue : 2000;
+  return Response.json({ logs: await loadPiSessionLog(cwd, sessionId, limit) });
 }
 
 // ─── GET /api/agent/runtime/status ────────────────────────────────────────

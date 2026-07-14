@@ -25,9 +25,12 @@ import {
   handleAgentAbort,
   handleAgentCompact,
   handleAgentTurn,
+  handleRuntimeLog,
+  handleRuntimeLogs,
   handleRuntimeEvents,
   handleRuntimeSessions,
   handleRuntimeStatus,
+  handleRuntimeUsage,
   handleSetupChecks,
 } from "./http/handlers";
 import {
@@ -54,6 +57,9 @@ app.get("/api/agent/runtime/sessions", () => handleRuntimeSessions());
 app.get("/api/agent/runtime/status", (c) => handleRuntimeStatus(c.req.raw));
 app.get("/api/agent/runtime/events", (c) => handleRuntimeEvents(c.req.raw));
 app.get("/api/agent/setup-checks", () => handleSetupChecks());
+app.get("/api/agent/usage", () => handleRuntimeUsage());
+app.get("/api/agent/logs", () => handleRuntimeLogs());
+app.get("/api/agent/logs/:id", (c) => handleRuntimeLog(c.req.raw, c.req.param("id")));
 
 // Browser-host endpoints. The fixed paths must be registered before the
 // :verb catch-all so e.g. /browser/fetch is not treated as a verb.

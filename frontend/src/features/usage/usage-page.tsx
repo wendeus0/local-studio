@@ -18,8 +18,8 @@ import { useUsage, type UsageSource } from "@/features/usage/use-usage";
 import { formatNumber } from "@/lib/formatters";
 
 const TABS: Array<{ id: UsageSource; label: string; sublabel: string }> = [
-  { id: "provider", label: "Provider", sublabel: "this controller" },
-  { id: "pi-sessions", label: "Pi sessions", sublabel: "coding-agent JSONL" },
+  { id: "pi-sessions", label: "Chat sessions", sublabel: "connected models" },
+  { id: "provider", label: "Controller", sublabel: "legacy runtime" },
 ];
 
 const PERIOD_ITEMS: Array<SegmentedItem<UsagePeriod>> = [
@@ -32,7 +32,7 @@ const PERIOD_ITEMS: Array<SegmentedItem<UsagePeriod>> = [
 const modelDisplayName = (modelId: string): string => modelId.split("/").pop() ?? modelId;
 
 export default function UsagePage() {
-  const [tab, setTab] = useState<UsageSource>("provider");
+  const [tab, setTab] = useState<UsageSource>("pi-sessions");
   const [period, setPeriod] = useState<UsagePeriod>("day");
   const {
     stats,
@@ -104,7 +104,7 @@ export default function UsagePage() {
                   All-time usage
                 </span>
                 <span className="font-mono text-[length:var(--fs-xs)] tabular-nums text-(--dim)/70">
-                  {tab === "provider" ? "controller" : "pi sessions"}
+                  {tab === "provider" ? "controller" : "local chat"}
                 </span>
               </div>
               <h1 className="mt-1.5 truncate text-[length:var(--fs-3xl)] font-semibold leading-tight tracking-[-0.01em] text-(--fg)">

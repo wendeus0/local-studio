@@ -17,6 +17,12 @@ function normalizePeakNumber(value: unknown): number | null {
 
 export type UsageSource = "provider" | "pi-sessions";
 
+async function getAgentUsageStats(): Promise<UsageStats> {
+  const response = await fetch("/api/agent/usage", { cache: "no-store" });
+  if (!response.ok) throw new Error("Could not load local chat usage.");
+  return (await response.json()) as UsageStats;
+}
+
 export function useUsage(source: UsageSource = "provider") {
   // Stale-while-revalidate: the controller round-trip can take seconds, so
   // seed from the last-loaded data and refresh in the background instead of
@@ -38,8 +44,7 @@ export function useUsage(source: UsageSource = "provider") {
     try {
       setLoading(true);
       setError(null);
-      const fetchUsage =
-        source === "pi-sessions" ? api.getPiSessionsUsageStats() : api.getUsageStats();
+      const fetchUsage = source === "pi-sessions" ? getAgentUsageStats() : api.getUsageStats();
       // Peak metrics are keyed by this controller's served models and are only
       // rendered for the provider source; skip the round-trip for pi-sessions.
       const fetchPeaks =
