@@ -3,7 +3,7 @@
   "version": "0.2.9",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "LOCAL_STUDIO_DATA_DIR=${LOCAL_STUDIO_DATA_DIR:-../data} next dev",
     "build": "next build --webpack",
     "start": "node scripts/start-standalone.mjs",
     "perf:audit": "node scripts/perf-audit.mjs",

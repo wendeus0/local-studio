@@ -26,12 +26,8 @@ import type {
 } from "@/features/agent/workspace/types";
 import { useProjects } from "@/features/agent/projects/context";
 import { useToolsRef } from "@/features/agent/tools/context";
-import { BACKEND_URL_STORAGE_KEY, getApiKey, getStoredBackendUrl } from "@/lib/api/connection";
-import {
-  CONTROLLERS_STORAGE_KEY,
-  loadSavedControllers,
-  normalizeControllerUrl,
-} from "@/lib/api/controllers";
+import { BACKEND_URL_STORAGE_KEY } from "@/lib/api/connection";
+import { CONTROLLERS_STORAGE_KEY } from "@/lib/api/controllers";
 import { paneSessions } from "@/features/agent/runtime/selectors";
 import {
   useWorkspaceHydrationEffects,
@@ -101,40 +97,8 @@ function createWorkspaceWindow(source: Window): WorkspaceWindow {
   };
 }
 
-function agentModelControllersPayload() {
-  const byUrl = new Map<string, { url: string; apiKey?: string; name?: string }>();
-  const activeUrl = normalizeControllerUrl(getStoredBackendUrl());
-  if (activeUrl) {
-    const activeApiKey = getApiKey();
-    byUrl.set(activeUrl, {
-      url: activeUrl,
-      ...(activeApiKey ? { apiKey: activeApiKey } : {}),
-      name: "primary",
-    });
-  }
-  for (const controller of loadSavedControllers()) {
-    const url = normalizeControllerUrl(controller.url);
-    if (!url) continue;
-    const existing = byUrl.get(url);
-    byUrl.set(url, {
-      ...existing,
-      url,
-      ...(controller.apiKey || existing?.apiKey
-        ? { apiKey: controller.apiKey || existing?.apiKey }
-        : {}),
-      ...(controller.name || existing?.name ? { name: controller.name || existing?.name } : {}),
-    });
-  }
-  return [...byUrl.values()];
-}
-
 async function loadAgentModelsPayload(): Promise<{ models?: AgentModel[]; error?: string }> {
-  const response = await fetch("/api/agent/models", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    cache: "no-store",
-    body: JSON.stringify({ controllers: agentModelControllersPayload() }),
-  });
+  const response = await fetch("/api/agent/models", { cache: "no-store" });
   const payload = await safeJson<{ models?: AgentModel[]; error?: string }>(response);
   if (!response.ok) throw new Error(payload.error || "Failed to load models");
   return payload;

@@ -335,11 +335,8 @@ export async function refreshPiModels(
   const agentDir = path.join(dataDir, "pi-agent");
   await mkdir(agentDir, { recursive: true });
   await chmod(agentDir, 0o700).catch(() => undefined);
-  const persisted =
-    requestedControllers && requestedControllers.length > 0
-      ? requestedControllers
-      : await loadPersistedControllers(agentDir);
-  const controllers = mergeControllers(settings, persisted);
+  const persisted = await loadPersistedControllers(agentDir);
+  const controllers = mergeControllers(settings, persisted.concat(requestedControllers ?? []));
   await savePersistedControllers(agentDir, controllers);
   const { models, controllerModels } = await fetchModelsFromControllers(controllers);
 

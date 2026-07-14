@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -25,6 +25,12 @@ test("Pi model refresh pulls and writes models from every configured controller"
     }),
     "utf8",
   );
+  mkdirSync(path.join(dataDir, "pi-agent"));
+  writeFileSync(
+    path.join(dataDir, "pi-agent", "controllers.json"),
+    JSON.stringify([{ url: "http://persisted.test:11434", name: "persisted" }]),
+    "utf8",
+  );
 
   globalThis.fetch = async (input, init) => {
     const url = String(input);
@@ -32,7 +38,9 @@ test("Pi model refresh pulls and writes models from every configured controller"
     requests.push({ url, authorization: headers.get("authorization") });
     const data = url.startsWith("http://primary.test:8080")
       ? [{ id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", max_model_len: 528_000 }]
-      : [{ id: "qwen3-coder", name: "Qwen3 Coder", max_model_len: 128_000 }];
+      : url.startsWith("http://persisted.test:11434")
+        ? [{ id: "granite4:tiny-h", name: "Granite 4 Tiny H", max_model_len: 128_000 }]
+        : [{ id: "qwen3-coder", name: "Qwen3 Coder", max_model_len: 128_000 }];
     return Response.json({ object: "list", data });
   };
 
@@ -44,13 +52,14 @@ test("Pi model refresh pulls and writes models from every configured controller"
     assert.deepEqual(
       requests.map((request) => request.url).sort(),
       [
+        "http://persisted.test:11434/v1/models",
         "http://primary.test:8080/v1/models",
         "http://secondary.test:8080/v1/models",
       ],
     );
     assert.deepEqual(
-      requests.map((request) => request.authorization).sort(),
-      ["Bearer primary-key", "Bearer secondary-key"],
+      requests.map((request) => request.authorization),
+      ["Bearer primary-key", null, "Bearer secondary-key"],
     );
 
     assert.deepEqual(
@@ -66,6 +75,12 @@ test("Pi model refresh pulls and writes models from every configured controller"
           rawId: "deepseek-v4-flash",
           providerId: "local-studio",
           controllerName: "primary",
+        },
+        {
+          id: "local-studio-persisted-test-11434/granite4:tiny-h",
+          rawId: "granite4:tiny-h",
+          providerId: "local-studio-persisted-test-11434",
+          controllerName: "persisted",
         },
         {
           id: "local-studio-secondary-test-8080/qwen3-coder",
@@ -92,14 +107,27 @@ test("Pi model refresh pulls and writes models from every configured controller"
     };
     assert.deepEqual(Object.keys(modelsConfig.providers).sort(), [
       "local-studio",
+      "local-studio-persisted-test-11434",
       "local-studio-secondary-test-8080",
     ]);
     assert.deepEqual(modelsConfig.providers["local-studio"]?.models.map((model) => model.id), [
       "deepseek-v4-flash",
     ]);
     assert.deepEqual(
+      modelsConfig.providers["local-studio-persisted-test-11434"]?.models.map((model) => model.id),
+      ["granite4:tiny-h"],
+    );
+    assert.deepEqual(
       modelsConfig.providers["local-studio-secondary-test-8080"]?.models.map((model) => model.id),
       ["qwen3-coder"],
+    );
+    assert.deepEqual(
+      JSON.parse(readFileSync(path.join(dataDir, "pi-agent", "controllers.json"), "utf8")),
+      [
+        { url: "http://primary.test:8080", apiKey: "primary-key", name: "primary" },
+        { url: "http://persisted.test:11434", apiKey: "", name: "persisted" },
+        { url: "http://secondary.test:8080", apiKey: "secondary-key", name: "secondary" },
+      ],
     );
   } finally {
     globalThis.fetch = previousFetch;
