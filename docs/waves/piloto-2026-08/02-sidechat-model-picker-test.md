@@ -1,7 +1,7 @@
 ---
 id: 02
 slug: sidechat-model-picker-test
-status: in_review
+status: done
 blockedBy: []
 executor: deepseek-v4-pro
 estimate: 2
@@ -10,6 +10,7 @@ pr: https://github.com/wendeus0/local-studio/pull/2
 linear:
 risk: low
 budget_commits: 4
+merged_sha: b6ca9aaffd79266ce589eb5ea6e4659ce515ae01
 ---
 
 # Cobrir a seleção de modelo do sidechat com teste de unidade

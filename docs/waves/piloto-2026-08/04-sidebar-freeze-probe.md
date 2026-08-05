@@ -1,11 +1,12 @@
 ---
 id: 04
 slug: sidebar-freeze-probe
-status: ready
+status: in_review
 blockedBy: [03]
 executor: deepseek-v4-pro
 estimate: 3
 verify: "npm --prefix frontend run check:quality"
+pr: https://github.com/wendeus0/local-studio/pull/4
 linear:
 risk: low
 budget_commits: 5

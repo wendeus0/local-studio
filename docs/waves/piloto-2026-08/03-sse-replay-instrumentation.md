@@ -1,7 +1,7 @@
 ---
 id: 03
 slug: sse-replay-instrumentation
-status: in_review
+status: done
 blockedBy: []
 executor: deepseek-v4-pro
 estimate: 3
@@ -10,6 +10,7 @@ pr: https://github.com/wendeus0/local-studio/pull/3
 linear:
 risk: low
 budget_commits: 5
+merged_sha: 99297e205e35563b72f67a647779e8a7529eb80e
 ---
 
 # Instrumentar o catch-up de replay SSE para turns em voo

@@ -1,7 +1,7 @@
 ---
 id: 01
 slug: apikeys-sync-guard
-status: in_review
+status: done
 blockedBy: []
 executor: deepseek-v4-pro
 estimate: 2
@@ -10,6 +10,7 @@ pr: https://github.com/wendeus0/local-studio/pull/1
 linear:
 risk: low
 budget_commits: 4
+merged_sha: d3445aaa178fc5ac850772f022587795f66aa32d
 ---
 
 # Cobrir com teste o filtro de credenciais no sync remoto de preferências
