@@ -69,7 +69,9 @@ function collectDurableUiPreferences(): Record<string, string> {
   return out;
 }
 
-function withoutControllerCredentials(prefs: Record<string, string>): Record<string, string> {
+export function withoutControllerCredentials(
+  prefs: Record<string, string>,
+): Record<string, string> {
   const { ...rest } = prefs;
   delete rest[CONTROLLERS_STORAGE_KEY];
   return rest;
