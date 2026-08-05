@@ -51,7 +51,7 @@ function paneGitBranch(
   return summary?.isRepo === false ? null : (summary?.branch ?? project?.branch ?? null);
 }
 
-function resolvePaneModelId(
+export function resolvePaneModelId(
   sessionModelId: string | undefined,
   selectedModelId: string,
   models: AgentModel[],
