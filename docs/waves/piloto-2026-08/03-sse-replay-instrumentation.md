@@ -1,11 +1,12 @@
 ---
 id: 03
 slug: sse-replay-instrumentation
-status: in_progress
+status: in_review
 blockedBy: []
 executor: deepseek-v4-pro
 estimate: 3
 verify: "npm --prefix frontend run check:quality"
+pr: https://github.com/wendeus0/local-studio/pull/3
 linear:
 risk: low
 budget_commits: 5
