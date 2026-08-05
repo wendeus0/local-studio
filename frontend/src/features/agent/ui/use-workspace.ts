@@ -7,6 +7,7 @@ import { clampComputerWidth, gentlySnapComputerWidth } from "@/features/agent/to
 import { createInitialState, reducer } from "@/features/agent/workspace/store";
 import {
   createSessionReplayQueue,
+  type ReplayDrainCounters,
   type SessionReplayQueue,
 } from "@/features/agent/workspace/replay-queue";
 import { makeFreshTab, newPaneId } from "@/features/agent/messages/helpers";
@@ -66,6 +67,7 @@ export type UseWorkspaceResult = {
   state: WorkspaceState;
   dispatch: WorkspaceDispatch;
   handles: WorkspaceHandles;
+  replayDebug: () => Readonly<Record<PaneId, Readonly<ReplayDrainCounters>>>;
 };
 
 export type UseWorkspaceOptions = {
@@ -162,6 +164,7 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
       getHandle: (paneId) => paneHandlesRef.current.get(paneId),
       getState: () => stateRef.current,
       setTimeout: (handler, delay) => window.setTimeout(handler, delay),
+      instrument: true,
     });
     return replayQueueRef.current;
   }, []);
@@ -345,5 +348,5 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
   useWorkspaceHydrationEffects({ dispatch, toolsRef, skipRestore: ephemeral });
   useWorkspaceRuntimeSync({ dispatch, sessions: [...state.sessions.values()] });
 
-  return { state, dispatch, handles };
+  return { state, dispatch, handles, replayDebug: () => getReplayQueue().debugCounters() };
 }
