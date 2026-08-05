@@ -1,7 +1,7 @@
 ---
 id: 04
 slug: sidebar-freeze-probe
-status: in_review
+status: done
 blockedBy: [03]
 executor: deepseek-v4-pro
 estimate: 3
@@ -10,6 +10,7 @@ pr: https://github.com/wendeus0/local-studio/pull/4
 linear:
 risk: low
 budget_commits: 5
+merged_sha: 84bf2112c3979b6ea1993bf0afa0636bea6731d7
 ---
 
 # Medir a expansão da sidebar em projeto grande usando a instrumentação de replay
