@@ -4,6 +4,29 @@ import { useMemo } from "react";
 import { ChevronDown, ChevronRight, File, Folder } from "@/ui/icon-registry";
 import type { FsEntry } from "@/features/agent/filesystem-types";
 
+export type ExpansionCounters = {
+  entriesRendered: number;
+};
+
+let expansionInstrumented = false;
+let entriesRendered = 0;
+
+export function enableExpansionInstrumentation(): void {
+  expansionInstrumented = true;
+}
+
+export function disableExpansionInstrumentation(): void {
+  expansionInstrumented = false;
+}
+
+export function resetExpansionCounters(): void {
+  entriesRendered = 0;
+}
+
+export function getExpansionCounters(): Readonly<ExpansionCounters> {
+  return { entriesRendered };
+}
+
 const TONE_GROUPS: [string, string[]][] = [
   [
     "text-(--link)",
@@ -101,6 +124,7 @@ export function TreeFileList({
   return (
     <>
       {filtered.map((entry) => {
+        if (expansionInstrumented) entriesRendered++;
         const isDir = entry.kind === "directory";
         const isExpanded = expandedDirs.has(entry.rel);
         const isLoading = dirLoading.has(entry.rel);
