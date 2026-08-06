@@ -1,12 +1,13 @@
 ---
 id: 05
 slug: ci-hardening
-status: ready
+status: in_review
 blockedBy: [04]
 executor: deepseek-v4-flash
 estimate: 2
 verify: "grep -q '^permissions:' .github/workflows/ci.yml && grep -q 'cancel-in-progress: true' .github/workflows/ci.yml && grep -q 'cache: npm' .github/workflows/ci.yml && echo ci.yml-hardened"
 risk: low
+pr: https://github.com/wendeus0/local-studio/pull/13
 linear:
 ---
 
