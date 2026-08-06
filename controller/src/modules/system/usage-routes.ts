@@ -1,4 +1,5 @@
 import type { UsageStats } from "@local-studio/contracts/usage";
+import type { AppContext } from "../../app-context";
 import { observeControllerFunction } from "../../core/function-observability";
 import type { RouteRegistrar } from "../../http/route-registrar";
 import { getUsageFromPiSessions } from "./usage/pi-sessions";
