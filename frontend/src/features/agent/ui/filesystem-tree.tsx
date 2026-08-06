@@ -4,6 +4,29 @@ import { useMemo } from "react";
 import { ChevronDown, ChevronRight, File, Folder } from "@/ui/icon-registry";
 import type { FsEntry } from "@/features/agent/filesystem-types";
 
+export type ExpansionCounters = {
+  entriesRendered: number;
+};
+
+let expansionInstrumented = false;
+let entriesRendered = 0;
+
+export function enableExpansionInstrumentation(): void {
+  expansionInstrumented = true;
+}
+
+export function disableExpansionInstrumentation(): void {
+  expansionInstrumented = false;
+}
+
+export function resetExpansionCounters(): void {
+  entriesRendered = 0;
+}
+
+export function getExpansionCounters(): Readonly<ExpansionCounters> {
+  return { entriesRendered };
+}
+
 const TONE_GROUPS: [string, string[]][] = [
   [
     "text-(--link)",
@@ -36,7 +59,7 @@ const FILE_TONE_BY_EXT: Record<string, string> = Object.fromEntries(
   TONE_GROUPS.flatMap(([tone, exts]) => exts.map((ext) => [ext, tone] as const)),
 );
 
-function fileTone(name: string): string {
+export function fileTone(name: string): string {
   const dot = name.lastIndexOf(".");
   const ext = dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
   return FILE_TONE_BY_EXT[ext] ?? "text-(--dim)";
@@ -101,6 +124,7 @@ export function TreeFileList({
   return (
     <>
       {filtered.map((entry) => {
+        if (expansionInstrumented) entriesRendered++;
         const isDir = entry.kind === "directory";
         const isExpanded = expandedDirs.has(entry.rel);
         const isLoading = dirLoading.has(entry.rel);
@@ -110,9 +134,12 @@ export function TreeFileList({
         return (
           <div key={entry.path}>
             <div
-              className={`flex w-full items-center gap-1 rounded-sm py-0.5 text-left text-[length:var(--fs-sm)] hover:bg-(--color-surface-hover) ${isActive ? "bg-(--color-surface-hover) text-(--fg)" : "text-(--dim)"}`}
+              className={`relative flex w-full items-center gap-1 rounded-sm py-0.5 text-left text-[length:var(--fs-sm)] hover:bg-(--hover) ${isActive ? "bg-(--color-selected) font-medium text-(--fg)" : "text-(--dim)"}`}
               style={{ paddingLeft: `${8 + indent}px`, paddingRight: "8px" }}
             >
+              {isActive ? (
+                <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-(--link)" />
+              ) : null}
               {isDir ? (
                 <button
                   type="button"
@@ -139,6 +166,7 @@ export function TreeFileList({
                 type="button"
                 onClick={() => (isDir ? onToggleDir(entry.rel) : onOpen(entry))}
                 title={entry.rel}
+                aria-current={isActive ? "page" : undefined}
                 className="flex min-w-0 flex-1 items-center gap-1 text-left"
               >
                 {isDir ? (

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { ArrowDownUp, Check, ExternalLink, Filter, Gauge, RefreshCw } from "@/ui/icon-registry";
+import { ArrowDownUp, Check, Filter, Gauge, RefreshCw } from "@/ui/icon-registry";
 import { SearchInput } from "@/ui";
 import { ModelButton, ModelSection, ModelRow, ModelValue, ModelStatus } from "./model-page";
 import type { HuggingFaceModel } from "@/lib/types";
@@ -7,24 +7,6 @@ import { ExploreModelRow } from "./explore-model-row";
 import { estimateRoughWeightsGb } from "./explore-model-stats";
 import type { ModelFit } from "./hardware-profile";
 import type { HardwareProfile, ModelGroup } from "./use-explore";
-
-const FALLBACK_MODELS = [
-  [
-    "Qwen/Qwen3-32B",
-    "Recent dense model family with strong local-serving coverage.",
-    "~64 GB · text-generation",
-  ],
-  [
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
-    "Reasoning-oriented fallback suggestion for search and downloads.",
-    "~64 GB · reasoning",
-  ],
-  [
-    "microsoft/Phi-4-mini-instruct",
-    "Small template row that keeps Explore useful on limited VRAM.",
-    "~8 GB · compact",
-  ],
-] as const;
 
 export const EXPLORE_LIBRARIES = [
   { value: "", label: "All libraries" },
@@ -180,7 +162,7 @@ function IconPopover({
             aria-hidden
             tabIndex={-1}
           />
-          <div className="absolute right-0 top-full z-50 mt-1 w-48 rounded-lg border border-(--ui-border) bg-(--ui-surface) py-1 shadow-lg">
+          <div className="absolute right-0 top-full z-50 mt-1 w-48 rounded-2xl border border-(--color-popover-border) bg-(--color-popover) py-1.5 shadow-[0px_16px_32px_-8px_rgba(0,0,0,0.3),0px_0px_0px_0.5px_rgba(0,0,0,0.1)]">
             <div className="px-2.5 py-1.5 text-[length:var(--fs-xs)] font-medium uppercase tracking-wide text-(--ui-muted)">
               {label}
             </div>
@@ -342,33 +324,74 @@ export function ExploreResultsSection({
   return (
     <ModelSection
       title="Model results"
-      description="Original models stay at the top level; quantized derivatives appear only after expanding an original. Click any row for the model card."
+      description="Open a model for details. Expand a family to inspect its variants."
       actions={
         <ModelStatus tone={groups.length ? "good" : error ? "warning" : "default"}>
-          {groups.length ? `${groups.length} models` : "defaults"}
+          {groups.length ? `${groups.length} models` : loading ? "syncing" : "empty"}
         </ModelStatus>
       }
     >
       {error ? <ExploreErrorRow error={error} /> : null}
-      {groups.length > 0
-        ? groups.flatMap((group) =>
-            exploreGroupRows({
-              group,
-              expanded: expandedKeys.has(group.key),
-              maxVramGb,
-              downloadsByModel,
-              startingModelIds,
-              isLocal,
-              toggleExpand,
-              startDownload,
-              pauseDownload,
-              resumeDownload,
-              openModelCard,
-            }),
-          )
-        : fallbackRows(search, loading)}
+      {groups.length > 0 ? (
+        groups.flatMap((group) =>
+          exploreGroupRows({
+            group,
+            expanded: expandedKeys.has(group.key),
+            maxVramGb,
+            downloadsByModel,
+            startingModelIds,
+            isLocal,
+            toggleExpand,
+            startDownload,
+            pauseDownload,
+            resumeDownload,
+            openModelCard,
+          }),
+        )
+      ) : loading ? (
+        <ExploreLoadingRows />
+      ) : error ? null : (
+        <ExploreEmptyRow search={search} />
+      )}
       {hasMore && groups.length > 0 ? <LoadMoreRow loading={loading} loadMore={loadMore} /> : null}
     </ModelSection>
+  );
+}
+
+function ExploreLoadingRows() {
+  return Array.from({ length: 6 }, (_, index) => (
+    <div
+      key={index}
+      className="grid min-h-14 grid-cols-1 gap-2 px-1 py-2.5 md:grid-cols-[minmax(260px,0.52fr)_minmax(0,0.48fr)] md:items-center md:gap-4"
+    >
+      <div className="flex min-w-0 items-center gap-2.5">
+        <div className="h-8 w-8 shrink-0 animate-pulse rounded-md bg-(--ui-hover)" />
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <div className="h-3.5 w-4/5 animate-pulse rounded bg-(--ui-hover)" />
+          <div className="h-2.5 w-2/5 animate-pulse rounded bg-(--ui-hover)/70" />
+        </div>
+      </div>
+      <div className="flex items-center justify-end gap-3">
+        <div className="h-3 w-16 animate-pulse rounded bg-(--ui-hover)/70" />
+        <div className="h-3 w-20 animate-pulse rounded bg-(--ui-hover)" />
+        <div className="h-6 w-24 animate-pulse rounded-md bg-(--ui-hover)/70" />
+      </div>
+    </div>
+  ));
+}
+
+function ExploreEmptyRow({ search }: { search: string }) {
+  const query = search.trim();
+  return (
+    <ModelRow
+      label={query ? `No models matched “${query}”` : "No models available"}
+      description={
+        query
+          ? "Try a model family, organization, or shorter identifier."
+          : "Refresh to query Hugging Face again."
+      }
+      value={<ModelValue dim>Nothing to show</ModelValue>}
+    />
   );
 }
 
@@ -471,33 +494,6 @@ function exploreGroupRows({
         />
       )),
   );
-}
-
-function fallbackRows(search: string, loading: boolean) {
-  return FALLBACK_MODELS.map(([label, description, value]) => (
-    <ModelRow
-      key={label}
-      label={label}
-      description={fallbackDescription(search, description)}
-      value={<ModelValue mono>{value}</ModelValue>}
-      status={<ModelStatus>{loading ? "syncing" : "fallback"}</ModelStatus>}
-      actions={
-        <a
-          href={`https://huggingface.co/${label}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex h-7 items-center justify-center rounded-md px-2 text-[length:var(--fs-sm)] text-(--dim) transition-colors hover:bg-(--hover) hover:text-(--fg)"
-        >
-          <ExternalLink className="h-3 w-3" />
-        </a>
-      }
-    />
-  ));
-}
-
-function fallbackDescription(search: string, description: string) {
-  const query = search.trim();
-  return query ? `No exact match yet for "${query}". ${description}` : description;
 }
 
 function updatePoolOverride(

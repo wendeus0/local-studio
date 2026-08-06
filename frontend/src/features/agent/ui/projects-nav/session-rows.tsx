@@ -1,19 +1,15 @@
 "use client";
 
-import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import {
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type ComponentType,
-  type MouseEvent,
-} from "react";
+import { useCallback, useMemo, useRef, useState, type DragEvent } from "react";
 import { safeJson } from "@/features/agent/safe-json";
-import { sessionRuntimeController } from "@/features/agent/runtime/session-runtime-controller";
 import { cleanSessionTitle } from "@/features/agent/messages/helpers";
+import {
+  markSessionActivitySeen,
+  sessionRows,
+  type SessionActivity,
+} from "@/features/agent/session-index";
+import { useSessionActivity } from "@/features/agent/ui/use-open-sessions";
 import {
   patchSessionPref,
   type SessionPref,
@@ -22,47 +18,22 @@ import {
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { useProjectSessionsReloadEffect } from "@/features/agent/ui/projects-nav/use-projects-nav-effects";
 import { workspaceCommands } from "@/features/agent/workspace/commands";
-import { preloadTerminalPanel } from "@/features/agent/ui/terminal-pane";
+import { workspaceNavigationActionForHref } from "@/features/agent/ui/agent-workspace-navigation";
 import type { Project as ProjectEntry } from "@/features/agent/projects/types";
-import { useProjects } from "@/features/agent/projects/context";
 import { ChatIcon, Folder, FolderOpen, PlusIcon, TrashIcon } from "@/ui/icons";
-import { Terminal } from "@/ui/icon-registry";
 import {
   mergeActiveSessionPref,
   patchActiveSessionPref,
   relativeAge,
   rememberAgentSessionNavTitle,
-  sessionDedupeKey,
   setAgentSessionDragData,
   setSessionArchive,
+  hrefWithOpenNonce,
 } from "./helpers";
 import { SessionNavRow } from "./session-nav-row";
 import type { ActiveAgentSession, SessionSummary } from "./types";
 
 const SESSIONS_PAGE_SIZE = 5;
-
-/**
- * The set of session ids the runtime currently reports as actively working —
- * including sessions running in the BACKGROUND (not open in any pane). Lets the
- * sidebar show a working indicator on history rows so a turn started in another
- * chat isn't invisible after you switch away.
- */
-function useActiveRuntimeIds(): ReadonlySet<string> {
-  return useSyncExternalStore(
-    (notify) => sessionRuntimeController().subscribeActiveRuntimeIds(notify),
-    () => sessionRuntimeController().getActiveRuntimeIds(),
-    () => sessionRuntimeController().getActiveRuntimeIds(),
-  );
-}
-
-/** Session ids that finished working while you weren't looking — the dot. */
-function useUnseenFinishedIds(): ReadonlySet<string> {
-  return useSyncExternalStore(
-    (notify) => sessionRuntimeController().subscribeActiveRuntimeIds(notify),
-    () => sessionRuntimeController().getUnseenFinishedIds(),
-    () => sessionRuntimeController().getUnseenFinishedIds(),
-  );
-}
 
 export function ProjectRow({
   project,
@@ -74,16 +45,26 @@ export function ProjectRow({
   prefs,
   excludedIds,
   icon = "folder",
+  reorderDraggable = false,
+  onReorderDragStart,
+  onReorderDragEnd,
+  onReorderDragOver,
+  onReorderDrop,
 }: {
   project: ProjectEntry;
   open: boolean;
   onToggle: () => void;
   onRemove?: () => void;
   onNewChatStart?: () => void;
-  activeSessions: ActiveAgentSession[];
+  activeSessions: readonly ActiveAgentSession[];
   prefs: SessionPrefs;
   excludedIds: ReadonlySet<string>;
   icon?: "folder" | "chat";
+  reorderDraggable?: boolean;
+  onReorderDragStart?: () => void;
+  onReorderDragEnd?: () => void;
+  onReorderDragOver?: (event: DragEvent) => void;
+  onReorderDrop?: () => void;
 }) {
   const [missingErrorVisible, setMissingErrorVisible] = useState(false);
   const handleToggle = () => {
@@ -97,7 +78,14 @@ export function ProjectRow({
 
   return (
     <div className="flex flex-col">
-      <div className="group relative flex h-7 items-center rounded-md pl-2 pr-1.5 text-(--dim)/70 transition-colors hover:bg-(--color-surface-hover) hover:text-(--fg)/80">
+      <div
+        className="group relative flex h-[var(--sidebar-row-height)] items-center rounded-[var(--sidebar-row-radius)] pl-2 pr-1.5 text-(--fg) transition-colors hover:bg-(--hover)"
+        draggable={reorderDraggable}
+        onDragStart={onReorderDragStart}
+        onDragEnd={onReorderDragEnd}
+        onDragOver={onReorderDragOver}
+        onDrop={onReorderDrop}
+      >
         <button
           type="button"
           onClick={handleToggle}
@@ -105,9 +93,9 @@ export function ProjectRow({
           className="flex min-w-0 flex-1 items-center gap-2 px-0 pr-8 text-left"
         >
           {icon === "chat" ? (
-            <ChatIcon className="h-3.5 w-3.5 shrink-0 opacity-55 transition-opacity group-hover:opacity-75" />
+            <ChatIcon className="h-3.5 w-3.5 shrink-0 opacity-70 transition-opacity group-hover:opacity-90" />
           ) : (
-            <span className="relative h-3.5 w-3.5 shrink-0 opacity-55 transition-opacity group-hover:opacity-75">
+            <span className="relative h-3.5 w-3.5 shrink-0 opacity-70 transition-opacity group-hover:opacity-90">
               <Folder
                 className={`absolute inset-0 h-3.5 w-3.5 transition-all duration-150 ${open ? "scale-90 opacity-0" : "scale-100 opacity-100"}`}
               />
@@ -116,9 +104,7 @@ export function ProjectRow({
               />
             </span>
           )}
-          <span className="truncate text-[length:var(--fs-lg)] font-normal text-(--dim) transition-colors group-hover:text-(--fg)/85">
-            {project.name}
-          </span>
+          <span className="truncate text-[length:var(--fs-md)] font-normal">{project.name}</span>
           {!project.exists ? (
             <span
               className="h-1.5 w-1.5 shrink-0 rounded-full bg-(--warn)"
@@ -129,9 +115,8 @@ export function ProjectRow({
         </button>
         <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
           <NewChatPlusButton
-            projectId={project.id}
             project={project}
-            label={`New chat in ${project.name}`}
+            label={`New task in ${project.name}`}
             className="flex h-5 w-5 items-center justify-center text-(--dim)/55 opacity-0 transition-opacity hover:text-(--fg)/80 group-hover:opacity-100"
             onNavigateStart={onNewChatStart}
           />
@@ -184,27 +169,17 @@ export function ProjectSessions({
   excludedIds,
 }: {
   project: ProjectEntry;
-  activeSessions: ActiveAgentSession[];
+  activeSessions: readonly ActiveAgentSession[];
   prefs: SessionPrefs;
   excludedIds: ReadonlySet<string>;
 }) {
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [visibleLimit, setVisibleLimit] = useState(SESSIONS_PAGE_SIZE);
-  const activeRuntimeIds = useActiveRuntimeIds();
-  const unseenFinishedIds = useUnseenFinishedIds();
+  const activity = useSessionActivity();
   const projectActiveSessions = useMemo(
     () => activeSessions.filter((session) => session.projectId === project.id),
     [activeSessions, project.id],
-  );
-  const activePiSessionIds = useMemo(
-    () =>
-      new Set(
-        projectActiveSessions
-          .map((session) => session.piSessionId)
-          .filter((id): id is string => Boolean(id)),
-      ),
-    [projectActiveSessions],
   );
   const reload = useCallback(async () => {
     setLoading(true);
@@ -229,69 +204,21 @@ export function ProjectSessions({
       projectActiveSessions.filter((session) => {
         const pref = mergeActiveSessionPref(session, prefs);
         if (pref?.pinned) return false;
-        if (session.piSessionId && excludedIds.has(session.piSessionId)) return false;
+        if (session.threadId && excludedIds.has(session.threadId)) return false;
         return !pref?.hidden;
       }),
     [projectActiveSessions, prefs, excludedIds],
   );
   const recent = useMemo(() => {
-    const seen = new Set<string>();
-    const recentSessions: SessionSummary[] = [];
-    for (const session of sessions ?? []) {
-      if (activePiSessionIds.has(session.id)) continue;
-      if (excludedIds.has(session.id)) continue;
-      if (prefs[session.id]?.pinned) continue;
-      if (prefs[session.id]?.hidden) continue;
-      const key = sessionDedupeKey(session);
-      if (seen.has(session.id) || seen.has(key)) continue;
-      seen.add(session.id);
-      seen.add(key);
-      recentSessions.push(session);
-    }
-    return recentSessions;
-  }, [sessions, activePiSessionIds, excludedIds, prefs]);
-
-  // Original start time per session id, from the server history list (stable —
-  // it does not change when a session is opened). Used to anchor an open
-  // session to its real position even if its live snapshot's startedAt was
-  // reset on open.
-  const historyStartByPiId = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const session of sessions ?? []) {
-      const at = Date.parse(session.startedAt) || 0;
-      if (at) map.set(session.id, at);
-    }
-    return map;
-  }, [sessions]);
-
-  // ONE list ordered by stable start time. Open sessions are NOT promoted to a
-  // separate top block — that made opening a chat reshuffle the sidebar and lose
-  // the user's place. Each session keeps its position whether or not it's open;
-  // the open one just renders as a live ActiveSessionRow in situ.
-  const orderedRows = useMemo<NavRow[]>(() => {
-    const rows: NavRow[] = [];
-    for (const session of visibleActiveSessions) {
-      const historyStart = session.piSessionId
-        ? historyStartByPiId.get(session.piSessionId)
-        : undefined;
-      rows.push({
-        kind: "active",
-        key: `${session.paneId}:${session.tabId}`,
-        sortAt: historyStart ?? (Date.parse(session.startedAt ?? session.updatedAt) || 0),
-        active: session,
-      });
-    }
-    for (const session of recent) {
-      rows.push({
-        kind: "recent",
-        key: session.id,
-        sortAt: Date.parse(session.startedAt) || 0,
-        recent: session,
-      });
-    }
-    rows.sort((a, b) => b.sortAt - a.sortAt);
-    return rows;
-  }, [visibleActiveSessions, recent, historyStartByPiId]);
+    return (sessions ?? []).filter(
+      (session) =>
+        !excludedIds.has(session.id) && !prefs[session.id]?.pinned && !prefs[session.id]?.hidden,
+    );
+  }, [sessions, excludedIds, prefs]);
+  const orderedRows = useMemo(
+    () => sessionRows(visibleActiveSessions, recent, activity),
+    [visibleActiveSessions, recent, activity],
+  );
   const visibleRows = orderedRows.slice(0, visibleLimit);
   const hasMore = orderedRows.length > visibleLimit || (sessions?.length ?? 0) > visibleLimit;
 
@@ -303,21 +230,22 @@ export function ProjectSessions({
         <div className="pl-2 pr-2 py-0.5 text-[length:var(--fs-sm)] text-(--dim)">No chats</div>
       ) : (
         visibleRows.map((row) =>
-          row.kind === "active" ? (
+          row.kind === "open" ? (
             <ActiveSessionRow
               key={row.key}
               project={project}
-              session={row.active}
-              pref={mergeActiveSessionPref(row.active, prefs)}
+              session={row.session}
+              pref={mergeActiveSessionPref(row.session, prefs)}
+              activity={row.activity}
             />
           ) : (
             <SessionRow
               key={row.key}
               project={project}
-              session={row.recent}
-              pref={prefs[row.recent.id] ?? {}}
-              isRunning={activeRuntimeIds.has(row.recent.id)}
-              unseen={unseenFinishedIds.has(row.recent.id)}
+              session={row.session}
+              pref={prefs[row.session.id] ?? {}}
+              isRunning={row.activity === "running"}
+              unseen={row.activity === "unseen"}
             />
           ),
         )
@@ -326,7 +254,7 @@ export function ProjectSessions({
         <button
           type="button"
           onClick={() => setVisibleLimit((value) => value + SESSIONS_PAGE_SIZE)}
-          className="flex h-6.5 items-center rounded-md pl-3 pr-2 text-left text-[length:var(--fs-sm)] text-(--dim)/80 transition-colors hover:bg-(--color-surface-hover) hover:text-(--fg)/80"
+          className="flex h-[var(--sidebar-row-height)] items-center rounded-[var(--sidebar-row-radius)] pl-3 pr-2 text-left text-[length:var(--fs-sm)] text-(--dim) transition-colors hover:bg-(--hover) hover:text-(--fg)"
         >
           Show more
         </button>
@@ -335,24 +263,31 @@ export function ProjectSessions({
   );
 }
 
-type NavRow =
-  | { kind: "active"; key: string; sortAt: number; active: ActiveAgentSession }
-  | { kind: "recent"; key: string; sortAt: number; recent: SessionSummary };
-
 export function ActiveSessionRow({
   project,
   session,
   pref,
+  activity,
+  dragging = false,
+  onReorderDragStart,
+  onReorderDragEnd,
+  onReorderDragOver,
+  onReorderDrop,
 }: {
   project: ProjectEntry;
   session: ActiveAgentSession;
   pref: SessionPref;
+  activity: SessionActivity;
+  dragging?: boolean;
+  onReorderDragStart?: () => void;
+  onReorderDragEnd?: () => void;
+  onReorderDragOver?: (event: DragEvent) => void;
+  onReorderDrop?: (event: DragEvent) => void;
 }) {
-  const projects = useProjects();
   const label =
     cleanSessionTitle(pref.title) || cleanSessionTitle(session.title) || "Current session";
   const isFocused = session.focused === true;
-  const rowClass = `group relative flex h-6.5 items-center rounded-md pl-3 pr-0 transition-colors ${isFocused ? "bg-(--color-surface-hover) text-(--fg)" : "text-(--fg)/72 hover:bg-(--color-surface-hover) hover:text-(--fg)/95"}`;
+  const rowClass = `group relative flex h-[var(--sidebar-row-height)] items-center rounded-[var(--sidebar-row-radius)] pl-3 pr-0 transition-[color,background-color,opacity] ${dragging ? "opacity-45" : ""} ${isFocused ? "bg-(--active) text-(--fg)" : "text-(--fg)/85 hover:bg-(--hover) hover:text-(--fg)"}`;
 
   return (
     <SessionNavRow
@@ -361,31 +296,44 @@ export function ActiveSessionRow({
       initialDraft={cleanSessionTitle(pref.title) || cleanSessionTitle(session.title)}
       age={relativeAge(session.startedAt ?? session.updatedAt)}
       rowClass={rowClass}
-      href={
-        session.piSessionId
-          ? `/agent?project=${encodeURIComponent(project.id)}&session=${encodeURIComponent(session.piSessionId)}&replace=1`
-          : undefined
-      }
+      href={`/agent?project=${encodeURIComponent(project.id)}${
+        session.threadId ? `&session=${encodeURIComponent(session.threadId)}&replace=1` : ""
+      }`}
       onOpen={() => {
-        if (!session.piSessionId) {
-          workspaceCommands().focusSession(session.paneId, session.tabId);
-          return;
+        if (session.paneId) {
+          workspaceCommands().focusSession(session.paneId, session.id, {
+            replaceWorkspace: true,
+          });
         }
-        projects.selectProject(project);
-        workspaceCommands().openSession(project, session.piSessionId, label);
       }}
       onPatchPref={(patch) => patchActiveSessionPref(session, patch)}
       onRenameCommit={(trimmed) =>
         workspaceCommands().renameSession(
           session.paneId,
-          session.tabId,
+          session.id,
           cleanSessionTitle(trimmed) || cleanSessionTitle(session.title) || label,
         )
       }
-      onRememberTitle={() => rememberAgentSessionNavTitle(session.piSessionId, label)}
-      onDragStart={(event) => setAgentSessionDragData(event, session)}
-      isRunning={session.status !== "idle" && session.status !== "done"}
-      unseen={session.unseen === true && !isFocused}
+      onRememberTitle={() => {
+        rememberAgentSessionNavTitle(session.threadId, label);
+        markSessionActivitySeen(session.id, session.threadId);
+      }}
+      onDragStart={(event) => {
+        setAgentSessionDragData(event, {
+          piSessionId: session.threadId,
+          projectId: session.projectId,
+          cwd: session.cwd,
+          paneId: session.paneId,
+          tabId: session.id,
+          title: session.title,
+        });
+        onReorderDragStart?.();
+      }}
+      onDragEnd={onReorderDragEnd}
+      onDragOver={onReorderDragOver}
+      onDrop={onReorderDrop}
+      isRunning={activity === "running"}
+      unseen={activity === "unseen" && !isFocused}
       canDoubleClickRename
       renameInputClass="text-[length:var(--fs-xs)]"
     />
@@ -398,14 +346,23 @@ export function SessionRow({
   pref,
   isRunning = false,
   unseen = false,
+  dragging = false,
+  onReorderDragStart,
+  onReorderDragEnd,
+  onReorderDragOver,
+  onReorderDrop,
 }: {
   project: ProjectEntry;
   session: SessionSummary;
   pref: SessionPref;
   isRunning?: boolean;
   unseen?: boolean;
+  dragging?: boolean;
+  onReorderDragStart?: () => void;
+  onReorderDragEnd?: () => void;
+  onReorderDragOver?: (event: DragEvent) => void;
+  onReorderDrop?: (event: DragEvent) => void;
 }) {
-  const projects = useProjects();
   const label =
     cleanSessionTitle(pref.title) ||
     cleanSessionTitle(session.firstUserMessage) ||
@@ -419,24 +376,24 @@ export function SessionRow({
       age={relativeAge(session.startedAt)}
       isRunning={isRunning}
       unseen={unseen}
-      rowClass="group relative flex h-6.5 items-center rounded-md pl-3 pr-0 text-(--fg)/72 transition-colors hover:bg-(--color-surface-hover) hover:text-(--fg)/95"
-      renameRowClass="flex h-6.5 items-center rounded-md bg-(--surface)/40 pl-3 pr-1"
+      rowClass={`group relative flex h-[var(--sidebar-row-height)] items-center rounded-[var(--sidebar-row-radius)] pl-3 pr-0 text-(--fg)/85 transition-[color,background-color,opacity] hover:bg-(--hover) hover:text-(--fg) ${dragging ? "opacity-45" : ""}`}
+      renameRowClass="flex h-[var(--sidebar-row-height)] items-center rounded-[var(--sidebar-row-radius)] bg-(--surface)/40 pl-3 pr-1"
       href={`/agent?project=${encodeURIComponent(project.id)}&session=${encodeURIComponent(session.id)}&replace=1`}
-      onPatchPref={(patch) => patchSessionPref(session.id, patch)}
-      onOpen={() => {
-        projects.selectProject(project);
-        workspaceCommands().openSession(project, session.id, label);
+      onOpen={(href) => {
+        const action = workspaceNavigationActionForHref(href, project, label);
+        if (action) workspaceCommands().navigate(action);
       }}
+      onPatchPref={(patch) => patchSessionPref(session.id, patch)}
       onArchive={() => {
         void setSessionArchive(session.id, project, label, true)
-          .then(() => patchSessionPref(session.id, { hidden: undefined }))
+          .then(() => patchSessionPref(session.id, { hidden: undefined, pinned: undefined }))
           .catch((error) => {
             console.warn("[agent] failed to archive session", error);
           });
       }}
       onRememberTitle={() => {
         rememberAgentSessionNavTitle(session.id, label);
-        sessionRuntimeController().markRuntimeSeen(session.id);
+        markSessionActivitySeen(session.id);
       }}
       onDragStart={(event) => {
         setAgentSessionDragData(event, {
@@ -445,151 +402,52 @@ export function SessionRow({
           cwd: project.path,
           title: label,
         });
+        onReorderDragStart?.();
       }}
+      onDragEnd={onReorderDragEnd}
+      onDragOver={onReorderDragOver}
+      onDrop={onReorderDrop}
       onContextMenu
       showClearAction
     />
   );
 }
 
-const NEW_CHAT_MENU_CLASS =
-  "fixed z-[999] min-w-[164px] -translate-x-full rounded-lg border border-(--color-popover-border) bg-(--color-popover) p-1 shadow-[0_8px_28px_rgba(0,0,0,0.45)]";
-
 export function NewChatPlusButton({
-  projectId,
   project,
   label,
   className,
   onNavigateStart,
 }: {
-  projectId: string;
-  project?: ProjectEntry;
+  project: ProjectEntry;
   label: string;
   className: string;
   onNavigateStart?: () => void;
 }) {
   const router = useRouter();
-  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
-  const menuOpen = menuPos !== null;
-  const anchorRef = useRef<HTMLDivElement>(null);
-  const popRef = useRef<HTMLDivElement>(null);
-  const closeMenu = useCallback(() => setMenuPos(null), []);
-
-  useMountSubscription(() => {
-    if (!menuOpen || typeof document === "undefined") return;
-    const onDocMouseDown = (event: globalThis.MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      if (anchorRef.current?.contains(target) || popRef.current?.contains(target)) return;
-      closeMenu();
-    };
-    const onScrollOrResize = () => closeMenu();
-    document.addEventListener("mousedown", onDocMouseDown);
-    window.addEventListener("scroll", onScrollOrResize, true);
-    window.addEventListener("resize", onScrollOrResize);
-    return () => {
-      document.removeEventListener("mousedown", onDocMouseDown);
-      window.removeEventListener("scroll", onScrollOrResize, true);
-      window.removeEventListener("resize", onScrollOrResize);
-    };
-  }, [menuOpen, closeMenu]);
-
   const openNewChat = () => {
     onNavigateStart?.();
-    if (project && workspaceCommands().isBound()) {
-      workspaceCommands().newChat(project);
-      return;
-    }
-    router.push(`/agent?project=${encodeURIComponent(projectId)}&new=${Date.now().toString(36)}`);
-  };
-  const openNewTerminal = () => {
-    onNavigateStart?.();
-    if (project && workspaceCommands().isBound()) {
-      workspaceCommands().openTerminal(project);
-      return;
-    }
-    router.push(
-      `/agent?project=${encodeURIComponent(projectId)}&new=${Date.now().toString(36)}&terminal=1`,
+    const href = hrefWithOpenNonce(
+      `/agent?project=${encodeURIComponent(project.id)}&new=1&replace=1`,
     );
-  };
-  const runItem = (action: () => void) => (event: MouseEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-    closeMenu();
-    action();
+    const action = workspaceNavigationActionForHref(href, project);
+    if (action) workspaceCommands().navigate(action);
+    router.push(href);
   };
 
-  return (
-    <div ref={anchorRef} className="relative flex items-center justify-center leading-none">
-      <button
-        type="button"
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          if (menuOpen) {
-            closeMenu();
-            return;
-          }
-          const rect = event.currentTarget.getBoundingClientRect();
-          setMenuPos({ top: rect.bottom + 4, left: rect.right });
-          // Warm the xterm chunks while the menu is open so "New terminal"
-          // doesn't pay the dynamic-import cost on click.
-          preloadTerminalPanel();
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") closeMenu();
-        }}
-        className={`${className} ${menuOpen ? "opacity-100" : ""}`}
-        aria-label={label}
-        aria-haspopup="menu"
-        aria-expanded={menuOpen}
-        title={label}
-      >
-        <PlusIcon className="block h-3.5 w-3.5" />
-      </button>
-      {menuPos
-        ? createPortal(
-            <div
-              ref={popRef}
-              className={NEW_CHAT_MENU_CLASS}
-              style={{ top: menuPos.top, left: menuPos.left }}
-              role="menu"
-              onKeyDown={(event) => {
-                if (event.key === "Escape") closeMenu();
-              }}
-            >
-              <NewChatMenuItem Icon={ChatIcon} onClick={runItem(openNewChat)}>
-                New chat
-              </NewChatMenuItem>
-              <NewChatMenuItem Icon={Terminal} onClick={runItem(openNewTerminal)}>
-                New terminal
-              </NewChatMenuItem>
-            </div>,
-            document.body,
-          )
-        : null}
-    </div>
-  );
-}
-
-function NewChatMenuItem({
-  Icon,
-  onClick,
-  children,
-}: {
-  Icon: ComponentType<{ className?: string }>;
-  onClick: (event: MouseEvent) => void;
-  children: string;
-}) {
   return (
     <button
       type="button"
-      role="menuitem"
-      onClick={onClick}
-      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[length:var(--fs-md)] text-(--fg)/90 transition-colors hover:bg-(--color-menu-hover) hover:text-(--fg)"
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openNewChat();
+      }}
+      className={className}
+      aria-label={label}
+      title={label}
     >
-      <Icon className="h-3.5 w-3.5 shrink-0 opacity-60" />
-      <span className="truncate">{children}</span>
+      <PlusIcon className="block h-3.5 w-3.5" />
     </button>
   );
 }

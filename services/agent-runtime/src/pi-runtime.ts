@@ -21,6 +21,7 @@ import { refreshPiModels, resolvePiModelSelection } from "./pi-runtime-models";
 import { findRuntimeSessionForLookup, piStatusFromEvents } from "./pi-runtime-state";
 import { findSessionFile } from "./sessions-store";
 import { getGlobalSingleton } from "./instances";
+import { connectorsRevisionSync } from "./connectors-service";
 import type {
   LoggedPiEvent,
   PiAgentSession,
@@ -41,24 +42,27 @@ function runtimeFingerprint(
     cwd,
     piSessionId: piSessionId ?? "",
     options: runtimeOptionsFingerprint(options),
+    connectors: connectorsRevisionSync(),
   });
 }
 
-/** Resource diagnostics gathered at session-creation time. Stored at module
- * scope so the setup-checks API route can surface extension load failures
- * without holding a runtime handle. */
+export function shouldRestartAfterPromptError(error: unknown): boolean {
+  return (
+    error instanceof Error && /Cannot continue from message role: assistant/i.test(error.message)
+  );
+}
+
 type PiResourceDiagnostic = {
   type: "info" | "warning" | "error";
   message: string;
-  /** Extension/skill path the diagnostic relates to, when available. */
   path?: string;
 };
 
-// Registered through the package's single global-instance registry so the
-// turn route, the setup-checks route, and the cached session manager — which
-// dev-mode bundling can evaluate independently — share a single map.
 function diagnosticsMap(): Map<string, PiResourceDiagnostic[]> {
-  return getGlobalSingleton("piResourceDiagnostics", () => new Map<string, PiResourceDiagnostic[]>());
+  return getGlobalSingleton(
+    "piResourceDiagnostics",
+    () => new Map<string, PiResourceDiagnostic[]>(),
+  );
 }
 
 export function piResourceDiagnostics(agentDir?: string): PiResourceDiagnostic[] {
@@ -78,6 +82,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
   private currentPiSessionId: string | null = null;
   private currentCwd = "";
   private currentModelId = "";
+  private currentStartOptions: RuntimeStartOptions = {};
   private agentDir = "";
 
   ensureStarted(
@@ -150,7 +155,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
                         }),
                       catch: (error) => error,
                     });
-                    const model = services.modelRegistry.find(providerId, backendModelId);
+                    const model = services.modelRuntime.getModel(providerId, backendModelId);
                     if (!model) {
                       return yield* Effect.fail(
                         new Error(
@@ -211,6 +216,7 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         this.currentCwd = resolvedCwd;
         this.currentPiSessionId = runtime.session.sessionId || desiredSessionId;
         this.currentFingerprint = fingerprint;
+        this.currentStartOptions = options;
         this.unsubscribe = runtime.session.subscribe((event) => this.recordEvent(event));
       }.bind(this),
     );
@@ -229,19 +235,19 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     onEvent: (event: PiEvent, seq: number) => void,
     options: { streamingBehavior?: "steer" | "followUp"; images?: AgentImageInput[] },
   ): Effect.Effect<void, unknown> {
-    const session = this.requireSession();
     const listener = (logged: LoggedPiEvent) => onEvent(logged.event, logged.seq);
     this.on("loggedEvent", listener);
     this.activePromptCount += 1;
     this.lastError = null;
     return Effect.tryPromise({
-      try: () =>
-        session.prompt(message, {
-          streamingBehavior: options.streamingBehavior,
-          images: options.images,
-        }),
+      try: () => this.promptSession(message, options),
       catch: (error) => error,
     }).pipe(
+      Effect.catch((error) =>
+        shouldRestartAfterPromptError(error)
+          ? this.restartPromptEffect(message, options)
+          : Effect.fail(error),
+      ),
       Effect.catch((error) =>
         Effect.sync(() => {
           this.lastError = error instanceof Error ? error.message : String(error);
@@ -251,6 +257,35 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
         Effect.sync(() => {
           this.activePromptCount = Math.max(0, this.activePromptCount - 1);
           this.off("loggedEvent", listener);
+        }),
+      ),
+    );
+  }
+
+  private promptSession(
+    message: string,
+    options: { streamingBehavior?: "steer" | "followUp"; images?: AgentImageInput[] },
+  ): Promise<void> {
+    return this.requireSession().prompt(message, {
+      streamingBehavior: options.streamingBehavior,
+      images: options.images,
+    });
+  }
+
+  private restartPromptEffect(
+    message: string,
+    options: { streamingBehavior?: "steer" | "followUp"; images?: AgentImageInput[] },
+  ): Effect.Effect<void, unknown> {
+    return this.ensureStartedEffect(
+      this.currentModelId,
+      this.currentCwd,
+      null,
+      this.currentStartOptions,
+    ).pipe(
+      Effect.andThen(
+        Effect.tryPromise({
+          try: () => this.promptSession(message, options),
+          catch: (error) => error,
         }),
       ),
     );
@@ -338,14 +373,6 @@ class PiSdkSession extends EventEmitter implements PiAgentSession {
     });
   }
 
-  /**
-   * Snapshot the SDK-computed context usage for the active session. Returns
-   * `null` when the runtime isn't started yet or the SDK has no usage data
-   * (e.g. before the first assistant message). Post-compaction staleness is
-   * the SDK's job: `getContextUsage()` reports `tokens: null` until an
-   * assistant responded after the latest compaction boundary
-   * (tests/frontend/agent-runtime/compaction.test.ts pins this contract).
-   */
   private computeContextUsage() {
     const session = this.runtime?.session;
     if (!session) return null;
@@ -418,12 +445,15 @@ class PiRuntimeManager {
     sessionId = DEFAULT_SESSION_ID,
     piSessionId?: string | null,
   ): { sessionId: string; session: PiAgentSession } {
-    return (
-      this.findSessionForLookup(sessionId, piSessionId) ?? {
-        sessionId,
-        session: this.getSession(sessionId),
-      }
-    );
+    const resolved = this.findSessionForLookup(sessionId, piSessionId);
+    if (resolved) return resolved;
+    const target = piSessionId?.trim();
+    const exactPiSessionId = this.sessions.get(sessionId)?.status.piSessionId;
+    const runtimeSessionId =
+      target && exactPiSessionId && exactPiSessionId !== target
+        ? `${sessionId}:${target}`
+        : sessionId;
+    return { sessionId: runtimeSessionId, session: this.getSession(runtimeSessionId) };
   }
 
   findSessionForLookup(

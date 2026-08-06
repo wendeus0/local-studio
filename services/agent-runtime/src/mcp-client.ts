@@ -1,14 +1,22 @@
-// Minimal MCP client: enough protocol to list and call tools on a connector.
-// Speaks newline-delimited JSON-RPC over stdio (official SDK transport) and
-// plain JSON POST for streamable-http servers. Deliberately dependency-free.
-
 import { spawn, type ChildProcess } from "child_process";
+import { Schema } from "effect";
 
-export interface McpToolInfo {
-  name: string;
-  description?: string;
-  inputSchema?: Record<string, unknown>;
-}
+const McpToolAnnotationsSchema = Schema.Struct({
+  destructiveHint: Schema.optional(Schema.Boolean),
+  idempotentHint: Schema.optional(Schema.Boolean),
+  openWorldHint: Schema.optional(Schema.Boolean),
+  readOnlyHint: Schema.optional(Schema.Boolean),
+});
+
+const McpToolInfoSchema = Schema.Struct({
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+  inputSchema: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  annotations: Schema.optional(McpToolAnnotationsSchema),
+});
+
+export type McpToolAnnotations = typeof McpToolAnnotationsSchema.Type;
+export type McpToolInfo = typeof McpToolInfoSchema.Type;
 
 export interface McpConnection {
   listTools(): Promise<McpToolInfo[]>;
@@ -21,12 +29,15 @@ export interface StdioTarget {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  cwd?: string;
 }
 
 export interface HttpTarget {
   transport: "http";
   url: string;
   headers?: Record<string, string>;
+  authorize?: (forceRefresh: boolean) => Promise<Record<string, string>>;
+  signal?: AbortSignal;
 }
 
 export type McpTarget = StdioTarget | HttpTarget;
@@ -35,12 +46,18 @@ const PROTOCOL_VERSION = "2025-03-26";
 const CLIENT_INFO = { name: "local-studio", version: "1.0.0" };
 const DEFAULT_TIMEOUT_MS = 60_000;
 
-interface JsonRpcResponse {
-  id?: number;
-  result?: unknown;
-  error?: { code: number; message: string };
-  method?: string;
-}
+const JsonRpcResponseSchema = Schema.Struct({
+  id: Schema.optional(Schema.Number),
+  result: Schema.optional(Schema.Unknown),
+  error: Schema.optional(Schema.Struct({ code: Schema.Number, message: Schema.String })),
+  method: Schema.optional(Schema.String),
+});
+
+const McpToolsResultSchema = Schema.Struct({
+  tools: Schema.optional(Schema.Array(McpToolInfoSchema)),
+});
+
+type JsonRpcResponse = typeof JsonRpcResponseSchema.Type;
 
 class StdioMcpConnection implements McpConnection {
   private child: ChildProcess;
@@ -57,6 +74,7 @@ class StdioMcpConnection implements McpConnection {
     this.child = spawn(target.command, target.args ?? [], {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, ...(target.env ?? {}) },
+      ...(target.cwd ? { cwd: target.cwd } : {}),
     });
     this.child.stdout?.on("data", (chunk: Buffer) => this.onData(chunk));
     this.child.stderr?.on("data", (chunk: Buffer) => {
@@ -84,18 +102,16 @@ class StdioMcpConnection implements McpConnection {
       newline = this.buffer.indexOf("\n");
       if (!line) continue;
       try {
-        const message = JSON.parse(line) as JsonRpcResponse;
+        const message = Schema.decodeUnknownSync(JsonRpcResponseSchema)(JSON.parse(line));
         if (typeof message.id === "number" && this.pending.has(message.id)) {
-          const entry = this.pending.get(message.id)!;
+          const entry = this.pending.get(message.id);
+          if (!entry) continue;
           this.pending.delete(message.id);
           clearTimeout(entry.timer);
           if (message.error) entry.reject(new Error(message.error.message));
           else entry.resolve(message.result);
         }
-        // Server-initiated requests/notifications are ignored; tools-only client.
-      } catch {
-        // Non-JSON line on stdout (some servers log there) — skip it.
-      }
+      } catch {}
     }
   }
 
@@ -133,8 +149,10 @@ class StdioMcpConnection implements McpConnection {
 
   async listTools(): Promise<McpToolInfo[]> {
     await this.initialized;
-    const result = (await this.request("tools/list", {})) as { tools?: McpToolInfo[] };
-    return result.tools ?? [];
+    const result = Schema.decodeUnknownSync(McpToolsResultSchema)(
+      await this.request("tools/list", {}),
+    );
+    return [...(result.tools ?? [])];
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -157,22 +175,34 @@ class HttpMcpConnection implements McpConnection {
   }
 
   private async request(method: string, params?: Record<string, unknown>): Promise<unknown> {
+    const payload = {
+      jsonrpc: "2.0",
+      id: this.nextId++,
+      method,
+      ...(params ? { params } : {}),
+    };
+    return this.send(payload, false);
+  }
+
+  private async send(payload: Record<string, unknown>, forceRefresh: boolean): Promise<unknown> {
+    const authorization = this.target.authorize ? await this.target.authorize(forceRefresh) : {};
+    const timeout = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
     const response = await fetch(this.target.url, {
       method: "POST",
+      redirect: this.target.authorize ? "error" : "follow",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json, text/event-stream",
         ...(this.sessionId ? { "Mcp-Session-Id": this.sessionId } : {}),
         ...(this.target.headers ?? {}),
+        ...authorization,
       },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: this.nextId++,
-        method,
-        ...(params ? { params } : {}),
-      }),
-      signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+      body: JSON.stringify(payload),
+      signal: this.target.signal ? AbortSignal.any([timeout, this.target.signal]) : timeout,
     });
+    if (response.status === 401 && this.target.authorize && !forceRefresh) {
+      return this.send(payload, true);
+    }
     const session = response.headers.get("Mcp-Session-Id");
     if (session) this.sessionId = session;
     if (!response.ok) throw new Error(`MCP HTTP ${response.status}`);
@@ -185,9 +215,11 @@ class HttpMcpConnection implements McpConnection {
         .filter((line) => line.startsWith("data:"))
         .pop();
       if (!dataLine) throw new Error("MCP HTTP: empty event stream response");
-      message = JSON.parse(dataLine.slice(5).trim()) as JsonRpcResponse;
+      message = Schema.decodeUnknownSync(JsonRpcResponseSchema)(
+        JSON.parse(dataLine.slice(5).trim()),
+      );
     } else {
-      message = (await response.json()) as JsonRpcResponse;
+      message = Schema.decodeUnknownSync(JsonRpcResponseSchema)(await response.json());
     }
     if (message.error) throw new Error(message.error.message);
     return message.result;
@@ -203,8 +235,10 @@ class HttpMcpConnection implements McpConnection {
 
   async listTools(): Promise<McpToolInfo[]> {
     await this.initialized;
-    const result = (await this.request("tools/list", {})) as { tools?: McpToolInfo[] };
-    return result.tools ?? [];
+    const result = Schema.decodeUnknownSync(McpToolsResultSchema)(
+      await this.request("tools/list", {}),
+    );
+    return [...(result.tools ?? [])];
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -212,9 +246,7 @@ class HttpMcpConnection implements McpConnection {
     return this.request("tools/call", { name, arguments: args });
   }
 
-  close(): void {
-    // HTTP connections are stateless per request; nothing to tear down.
-  }
+  close(): void {}
 }
 
 export const connectMcp = (target: McpTarget): McpConnection =>

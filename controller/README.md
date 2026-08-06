@@ -1,6 +1,6 @@
 # Controller
 
-`controller/` is the Bun/Hono backend for Local Studio. It exposes the HTTP API that the frontend, desktop app, and CLI use to manage models, proxy inference requests, read runtime status, and inspect usage/system data.
+`controller/` is the Bun/Hono backend for Local Studio. It exposes the HTTP API that the frontend and desktop app use to manage models, proxy inference requests, read runtime status, and inspect usage/system data.
 
 ## What It Does
 
@@ -15,9 +15,8 @@
 
 - Bun runtime.
 - Hono HTTP framework.
-- Zod configuration validation.
+- Effect Schema configuration and boundary validation.
 - SQLite-backed local stores.
-- `prom-client` metrics.
 - Swagger UI from `@hono/swagger-ui`.
 - Runtime probes for Python, Docker, `llama-server`, and MLX Python environments.
 
@@ -104,3 +103,4 @@ Runtime-related environment variables include:
 - `src/modules/proxy/`: OpenAI-compatible proxy and inference accounting.
 - `src/modules/system/`: metrics, logs, usage, events, and platform state.
 - `src/stores/`: SQLite helpers and persisted stores.
+- `contracts/`: the `@local-studio/contracts` package — the controller's HTTP API contract, consumed by the frontend via a `file:` dependency.

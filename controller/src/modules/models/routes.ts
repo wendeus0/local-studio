@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import type { RouteRegistrar } from "../../http/route-registrar";
 import type { Recipe } from "../models/types";
-import type { ProviderConfig } from "../../config/persisted-config";
+import { resolveModelVision } from "@local-studio/contracts/model-capabilities";
 
 /**
  * OpenAI-compatible model info.
@@ -15,7 +15,7 @@ interface OpenAIModelInfo {
   owned_by: string;
   active: boolean;
   max_model_len?: number | null;
-  metadata?: Record<string, unknown>;
+  metadata: Record<string, unknown>;
 }
 
 /**
@@ -35,48 +35,25 @@ function isMockInferenceEnabled(): boolean {
   return parseBooleanFlag(process.env["LOCAL_STUDIO_MOCK_INFERENCE"]);
 }
 
-function recipeMetadata(recipe: Recipe): Record<string, unknown> | undefined {
-  const metadata = recipe.extra_args?.["metadata"];
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-    return undefined;
-  }
-  return metadata as Record<string, unknown>;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-async function providerModels(
-  providers: ProviderConfig[],
-  created: number,
-): Promise<OpenAIModelInfo[]> {
-  const responses = await Promise.all(
-    providers
-      .filter((provider) => provider.enabled)
-      .map(async (provider) => {
-        try {
-          const response = await fetch(`${provider.base_url.replace(/\/+$/, "")}/v1/models`, {
-            ...(provider.api_key ? { headers: { Authorization: `Bearer ${provider.api_key}` } } : {}),
-            signal: AbortSignal.timeout(5_000),
-          });
-          if (!response.ok) return [];
-          const payload = (await response.json()) as { data?: Array<{ id?: unknown }> };
-          return (payload.data ?? []).flatMap((model) =>
-            typeof model.id === "string" && model.id.trim()
-              ? [
-                  {
-                    id: `${provider.id}/${model.id}`,
-                    object: "model" as const,
-                    created,
-                    owned_by: provider.id,
-                    active: true,
-                  },
-                ]
-              : [],
-          );
-        } catch {
-          return [];
-        }
-      }),
-  );
-  return responses.flat();
+function recipeMetadata(recipe: Recipe): Record<string, unknown> {
+  const metadata = recipe.extra_args?.["metadata"];
+  return isRecord(metadata) ? metadata : {};
+}
+
+function resolvedRecipeMetadata(recipe: Recipe, modelId: string): Record<string, unknown> {
+  const metadata = recipeMetadata(recipe);
+  return {
+    ...metadata,
+    vision: resolveModelVision({
+      identifiers: [modelId, recipe.id, recipe.name, recipe.model_path],
+      recipeOverride: recipe.vision,
+      metadata,
+    }),
+  };
 }
 
 export const registerModelsRoutes: RouteRegistrar = (app, context) => {
@@ -118,7 +95,6 @@ export const registerModelsRoutes: RouteRegistrar = (app, context) => {
         }
       }
       const modelId = recipe.served_model_name ?? recipe.id;
-      const metadata = recipeMetadata(recipe);
       models.push({
         id: modelId,
         object: "model",
@@ -126,7 +102,7 @@ export const registerModelsRoutes: RouteRegistrar = (app, context) => {
         owned_by: "local-studio",
         active: isActive,
         max_model_len: maxModelLength,
-        ...(metadata ? { metadata } : {}),
+        metadata: resolvedRecipeMetadata(recipe, modelId),
       });
     }
 
@@ -145,10 +121,12 @@ export const registerModelsRoutes: RouteRegistrar = (app, context) => {
         owned_by: "local-studio",
         active: true,
         max_model_len: activeModelData?.data?.[0]?.max_model_len ?? 32768,
+        metadata: {
+          vision: resolveModelVision({ identifiers: [inferredId] }),
+        },
       });
     }
 
-    models.push(...(await providerModels(context.config.providers, now)));
     const payload: OpenAIModelList = { object: "list", data: models };
     return ctx.json(payload);
   });
@@ -200,6 +178,7 @@ export const registerModelsRoutes: RouteRegistrar = (app, context) => {
       owned_by: "local-studio",
       active: isActive,
       max_model_len: maxModelLength,
+      metadata: resolvedRecipeMetadata(recipe, recipe.served_model_name ?? recipe.id),
     };
 
     return ctx.json(payload);
@@ -360,7 +339,7 @@ export const registerModelsRoutes: RouteRegistrar = (app, context) => {
           : Promise.resolve(null),
       ]);
       if (!listResponse.ok) {
-        return ctx.json(
+        return Response.json(
           { detail: `HuggingFace API error: ${listResponse.status}` },
           { status: listResponse.status },
         );

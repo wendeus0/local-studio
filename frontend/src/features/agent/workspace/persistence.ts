@@ -1,9 +1,4 @@
-// Workspace localStorage IO. writePaneState/writeActiveSessions are the ONLY
-// workspace writers of browser storage, and runWorkspaceEffect is their only
-// caller — persistence happens as a post-dispatch effect, never inline.
-
 import { collectLeaves } from "@/features/agent/workspace/layout";
-import type { ActiveAgentSessionSnapshot } from "@/features/agent/active-sessions";
 import type { Session, SessionId, SessionsMap } from "@/features/agent/runtime/types";
 import type { ToolSelection } from "@/features/agent/tools/types";
 import type {
@@ -16,17 +11,23 @@ import type {
 import {
   PANE_LAYOUT_KEY,
   PANE_STATE_KEY,
-  persistActiveAgentSessions,
   restorePersistedPaneState,
   type PersistedPaneEntry,
   sessionMetaForPersistence,
   type WorkspaceStorage,
 } from "@/features/agent/workspace/store";
 import { makeFreshTab } from "@/features/agent/messages/helpers";
+import {
+  loadSessionDrafts,
+  restoreSessionDrafts,
+  sessionDraftsWithSessions,
+} from "@/features/agent/workspace/session-drafts";
+import { readTranscriptSnapshot } from "@/features/agent/workspace/transcript-cache";
 
 const SESSIONS_COLLAPSED_KEY = "local-studio.agent.sessionsCollapsed";
 const SESSIONS_COLLAPSED_CLEANED_KEY = "local-studio.agent.sessionsCollapsedCleaned";
 const LEGACY_TRANSCRIPT_CACHE_KEY = "local-studio.agent.transcripts.v1";
+const LEGACY_ACTIVE_SESSIONS_KEY = "local-studio.agent.activeSessions.snapshot";
 
 function readStorage(storage: WorkspaceStorage, key: string): string | null {
   try {
@@ -39,17 +40,13 @@ function readStorage(storage: WorkspaceStorage, key: string): string | null {
 function setStorage(storage: WorkspaceStorage, key: string, value: string): void {
   try {
     storage.setItem(key, value);
-  } catch {
-    // Ignore quota/private-mode failures; workspace state remains in memory.
-  }
+  } catch {}
 }
 
 function removeStorage(storage: WorkspaceStorage, key: string): void {
   try {
     storage.removeItem(key);
-  } catch {
-    // Ignore storage failures; migrations are best-effort.
-  }
+  } catch {}
 }
 
 function restoreLegacyLayout(rawLayout: string): {
@@ -82,34 +79,72 @@ function migrateStorage(storage: WorkspaceStorage): void {
     setStorage(storage, SESSIONS_COLLAPSED_CLEANED_KEY, "1");
   }
   removeStorage(storage, LEGACY_TRANSCRIPT_CACHE_KEY);
+  removeStorage(storage, LEGACY_ACTIVE_SESSIONS_KEY);
 }
 
 export type LoadedFromStorage = {
   workspace: Partial<WorkspaceState>;
-  /** Per-session tool selections recovered from the persisted shape. */
   selections: Map<SessionId, ToolSelection>;
-  /**
-   * Legacy pre-alias runtime keys by session id, read once from old persisted
-   * state to seed the runtime controller's connection-key override.
-   */
   legacyRuntimeKeys: Map<SessionId, string>;
 };
 
 export function loadInitialFromStorage(storage: WorkspaceStorage): LoadedFromStorage {
   migrateStorage(storage);
+  const storedDrafts = loadSessionDrafts(storage);
 
   const rawState = readStorage(storage, PANE_STATE_KEY);
   const restoredState = rawState ? restorePersistedPaneState(rawState) : null;
   if (restoredState) {
     const { selections, legacyRuntimeKeys, ...workspace } = restoredState;
-    // Flag the durable-restore path so hydrateActiveSessions trusts this layout
-    // (incl. a terminal main pane) instead of rebuilding panes from chat snapshots.
-    return { workspace: { ...workspace, paneStateRestored: true }, selections, legacyRuntimeKeys };
+    const sessions = restoreSessionDrafts(
+      seedCachedTranscripts(workspace.sessions, storage),
+      storedDrafts,
+    );
+    return {
+      workspace: {
+        ...workspace,
+        sessions,
+        sessionDrafts: sessionDraftsWithSessions(storedDrafts, sessions),
+      },
+      selections,
+      legacyRuntimeKeys,
+    };
   }
 
   const rawLayout = readStorage(storage, PANE_LAYOUT_KEY);
   const restoredLayout = rawLayout ? restoreLegacyLayout(rawLayout) : null;
-  return { workspace: restoredLayout ?? {}, selections: new Map(), legacyRuntimeKeys: new Map() };
+  if (!restoredLayout) {
+    return {
+      workspace: storedDrafts.size > 0 ? { sessionDrafts: storedDrafts } : {},
+      selections: new Map(),
+      legacyRuntimeKeys: new Map(),
+    };
+  }
+  const sessions = restoreSessionDrafts(restoredLayout.sessions, storedDrafts);
+  return {
+    workspace: {
+      ...restoredLayout,
+      sessions,
+      sessionDrafts: sessionDraftsWithSessions(storedDrafts, sessions),
+    },
+    selections: new Map(),
+    legacyRuntimeKeys: new Map(),
+  };
+}
+
+function seedCachedTranscripts(
+  sessions: Map<SessionId, Session>,
+  storage: WorkspaceStorage,
+): Map<SessionId, Session> {
+  let next: Map<SessionId, Session> | null = null;
+  for (const [id, session] of sessions) {
+    if (!session.piSessionId) continue;
+    const cached = readTranscriptSnapshot(session.piSessionId, storage);
+    if (!cached || cached.length === 0) continue;
+    next ??= new Map(sessions);
+    next.set(id, { ...session, messages: cached });
+  }
+  return next ?? sessions;
 }
 
 export function writePaneState(
@@ -119,19 +154,6 @@ export function writePaneState(
 ): void {
   const panes: Record<string, PersistedPaneEntry> = {};
   for (const [paneId, pane] of state.panesById.entries()) {
-    if (pane.kind === "terminal") {
-      panes[paneId] = {
-        kind: "terminal",
-        mountKey: pane.mountKey,
-        cwd: pane.cwd,
-        title: pane.title,
-        ownerSessionId: pane.ownerSessionId,
-        ownerPiSessionId: pane.ownerPiSessionId,
-        projectId: pane.projectId ?? null,
-        createdAt: pane.createdAt,
-      };
-      continue;
-    }
     const session = state.sessions.get(pane.sessionId);
     panes[paneId] = {
       activeTabId: pane.sessionId,
@@ -145,17 +167,4 @@ export function writePaneState(
     PANE_STATE_KEY,
     JSON.stringify({ version: 1, layout: state.layout, focusedPaneId: state.focusedPaneId, panes }),
   );
-  // PANE_LAYOUT_KEY is legacy: still read as a restore fallback for very old
-  // profiles (see loadInitialFromStorage) but no longer written.
-}
-
-export function writeActiveSessions(
-  storage: WorkspaceStorage,
-  sessions: ActiveAgentSessionSnapshot[],
-): void {
-  try {
-    persistActiveAgentSessions(sessions, storage);
-  } catch {
-    // Ignore quota/private-mode failures; the broadcast still updates listeners.
-  }
 }

@@ -22,6 +22,13 @@ import { InferenceRequestStore } from "./stores/inference-request-store";
 import { ControllerSettingsStore } from "./stores/controller-settings-store";
 import { ControllerRequestStore } from "./stores/controller-request-store";
 import { RigStore } from "./stores/rig-store";
+import {
+  createGpuLeaseRegistry,
+  perUserGpuLeaseLockDirectory,
+  type GpuLeaseRegistry,
+} from "./modules/system/gpu-leases";
+import { getGpuInfo } from "./modules/system/platform/gpu";
+import { SpeechService } from "./modules/speech/service";
 
 export interface AppContext {
   config: Config;
@@ -32,6 +39,8 @@ export interface AppContext {
   processManager: ProcessManager;
   downloadManager: DownloadManager;
   engineService: EngineCoordinator;
+  gpuLeaseRegistry: GpuLeaseRegistry;
+  speechService: SpeechService;
   stores: {
     recipeStore: RecipeStore;
     downloadStore: DownloadStore;
@@ -91,6 +100,9 @@ export const createAppContext = (): AppContext => {
   const launchFailureBudget = createLaunchFailureBudget();
   const processManager = createProcessManager(config, logger, eventManager);
   const downloadManager = new DownloadManager(config, downloadStore, eventManager, logger);
+  const gpuLeaseRegistry = createGpuLeaseRegistry({
+    lockDirectory: perUserGpuLeaseLockDirectory(),
+  });
 
   const engineService = new EngineCoordinator({
     config,
@@ -98,6 +110,15 @@ export const createAppContext = (): AppContext => {
     processManager,
     recipeStore,
     launchFailureBudget,
+    gpuLeaseRegistry,
+    gpuInfo: getGpuInfo,
+  });
+  const speechService = new SpeechService({
+    dataDirectory: config.data_dir,
+    databasePath: dbPath,
+    engine: engineService,
+    gpuLeaseRegistry,
+    gpuInfo: getGpuInfo,
   });
 
   lifetimeMetricsStore.ensureFirstStarted();
@@ -111,6 +132,8 @@ export const createAppContext = (): AppContext => {
     processManager,
     downloadManager,
     engineService,
+    gpuLeaseRegistry,
+    speechService,
     stores: {
       recipeStore,
       downloadStore,

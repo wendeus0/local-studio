@@ -1,8 +1,8 @@
 "use client";
 
+import { memo } from "react";
 import { AgentModelPicker } from "@/features/agent/ui/agent-model-picker";
 import { ChatPane } from "@/features/agent/ui/chat-pane";
-import { TerminalPane } from "@/features/agent/ui/terminal-pane";
 import type { ProjectsContextValue } from "@/features/agent/projects/context";
 import type { useTools } from "@/features/agent/tools/context";
 import type { Project } from "@/features/agent/projects/types";
@@ -14,8 +14,8 @@ import type {
   WorkspaceState,
 } from "@/features/agent/workspace/types";
 import { activeSession } from "@/features/agent/runtime/selectors";
+import { terminalOwnerFor } from "@/features/agent/terminal-owners";
 import { collectLeaves } from "@/features/agent/workspace/layout";
-import { canRestoreTerminalOwner } from "@/features/agent/workspace/pane-controller";
 import type { WorkspaceHandles } from "@/features/agent/ui/use-workspace";
 
 export type WorkspacePaneRenderContext = {
@@ -26,13 +26,13 @@ export type WorkspacePaneRenderContext = {
   dispatch: WorkspaceDispatch;
   handles: WorkspaceHandles;
   compact?: boolean;
+  composerOnly?: boolean;
 };
 
-type WorkspacePaneView = {
+export type WorkspacePaneView = {
   paneId: PaneId;
   pane: ChatPaneState;
   session: ReturnType<typeof activeSession>;
-  sessionList: NonNullable<ReturnType<typeof activeSession>>[];
   project: Project | null;
   cwd: string;
   modelId: string;
@@ -51,7 +51,7 @@ function paneGitBranch(
   return summary?.isRepo === false ? null : (summary?.branch ?? project?.branch ?? null);
 }
 
-function resolvePaneModelId(
+export function resolvePaneModelId(
   sessionModelId: string | undefined,
   selectedModelId: string,
   models: AgentModel[],
@@ -83,7 +83,7 @@ function selectWorkspacePaneView(
   projects: ProjectsContextValue,
 ): WorkspacePaneView | null {
   const pane = state.panesById.get(paneId);
-  if (!pane || pane.kind === "terminal") return null;
+  if (!pane) return null;
   const session = activeSession(state, paneId);
   const project = projects.resolveProject(session);
   const modelId = resolvePaneModelId(session?.modelId, state.selectedModel, state.models);
@@ -92,7 +92,6 @@ function selectWorkspacePaneView(
     paneId,
     pane,
     session,
-    sessionList: session ? [session] : [],
     project,
     cwd: session?.cwd ?? project?.path ?? projects.agentCwd,
     modelId,
@@ -105,43 +104,77 @@ function selectWorkspacePaneView(
   };
 }
 
-export function renderWorkspacePane({
-  paneId,
-  state,
-  projects,
+export function sameWorkspacePaneView(
+  previous: WorkspacePaneView,
+  next: WorkspacePaneView,
+): boolean {
+  return (
+    previous.paneId === next.paneId &&
+    previous.pane === next.pane &&
+    previous.session === next.session &&
+    previous.project === next.project &&
+    previous.cwd === next.cwd &&
+    previous.modelId === next.modelId &&
+    previous.model === next.model &&
+    previous.gitSummary === next.gitSummary &&
+    previous.gitBranch === next.gitBranch &&
+    previous.isNewSession === next.isNewSession &&
+    previous.canClose === next.canClose &&
+    previous.isFocused === next.isFocused
+  );
+}
+
+type WorkspacePaneProps = {
+  view: WorkspacePaneView;
+  models: AgentModel[];
+  modelsLoading: boolean;
+  tools: ReturnType<typeof useTools>;
+  dispatch: WorkspaceDispatch;
+  handles: WorkspaceHandles;
+  compact: boolean;
+  composerOnly: boolean;
+};
+
+function sameWorkspacePaneProps(previous: WorkspacePaneProps, next: WorkspacePaneProps): boolean {
+  return (
+    sameWorkspacePaneView(previous.view, next.view) &&
+    previous.models === next.models &&
+    previous.modelsLoading === next.modelsLoading &&
+    previous.tools.browser.enabled === next.tools.browser.enabled &&
+    previous.tools.browser.backend === next.tools.browser.backend &&
+    previous.tools.computer.canvasEnabled === next.tools.computer.canvasEnabled &&
+    previous.tools.computer.open === next.tools.computer.open &&
+    previous.tools.toggleBrowserBackend === next.tools.toggleBrowserBackend &&
+    previous.tools.setBrowserEnabled === next.tools.setBrowserEnabled &&
+    previous.tools.closeComputerTab === next.tools.closeComputerTab &&
+    previous.tools.setComputerTab === next.tools.setComputerTab &&
+    previous.tools.toggleCanvas === next.tools.toggleCanvas &&
+    previous.tools.toggleComputerOpen === next.tools.toggleComputerOpen &&
+    previous.dispatch === next.dispatch &&
+    previous.handles === next.handles &&
+    previous.compact === next.compact &&
+    previous.composerOnly === next.composerOnly
+  );
+}
+
+const WorkspacePane = memo(function WorkspacePane({
+  view,
+  models,
+  modelsLoading,
   tools,
   dispatch,
   handles,
-  compact = false,
-}: WorkspacePaneRenderContext) {
-  const pane = state.panesById.get(paneId);
-  if (pane?.kind === "terminal") {
-    return (
-      <TerminalPane
-        key={paneId}
-        paneId={paneId}
-        pane={pane}
-        canClose={collectLeaves(state.layout).length > 1 || canRestoreTerminalOwner(state, paneId)}
-        rightPanelOpen={tools.computer.open}
-        onFocus={() => dispatch({ type: "focusPane", paneId })}
-        onClose={() => handles.closePane(paneId)}
-        onSplit={(direction) => handles.splitTerminal(paneId, direction)}
-        onNewTerminal={() => handles.splitTerminal(paneId, "vertical")}
-        onToggleRightPanel={tools.toggleComputerOpen}
-      />
-    );
-  }
-  const view = selectWorkspacePaneView(paneId, state, projects);
-  if (!view) return null;
-
+  compact,
+  composerOnly,
+}: WorkspacePaneProps) {
+  const sessions = view.session ? [view.session] : [];
   return (
     <ChatPane
-      key={view.paneId}
       paneId={view.paneId}
       modelId={view.modelId}
       modelName={view.model?.name ?? view.modelId ?? null}
       modelSupportsVision={view.model?.vision ?? false}
-      modelsLoading={state.modelsLoading}
+      modelsLoading={modelsLoading}
       contextWindow={view.model?.contextWindow ?? 0}
       cwd={view.cwd}
       projectName={view.project?.name ?? null}
@@ -150,10 +183,10 @@ export function renderWorkspacePane({
       onInitGit={handles.initGitForActiveProject}
       modelSelector={
         <AgentModelPicker
-          models={state.models}
+          models={models}
           selectedModel={view.modelId}
           onSelect={(modelId) => handles.selectPaneModel(view.paneId, modelId)}
-          loading={state.modelsLoading}
+          loading={modelsLoading}
         />
       }
       browserToolEnabled={tools.browser.enabled}
@@ -173,17 +206,47 @@ export function renderWorkspacePane({
       onPiSessionIdChange={handles.notifySessionsChanged}
       isFocused={view.isFocused}
       onFocus={() => dispatch({ type: "focusPane", paneId: view.paneId })}
-      tabs={view.sessionList}
+      tabs={sessions}
       activeTabId={view.pane.sessionId}
-      onTabsChange={(nextTabsOrUpdater) => handles.setPaneTabs(view.paneId, nextTabsOrUpdater)}
+      onUpdateSession={handles.updateSession}
       onRenameSession={(tabId, title) => handles.renameTab(view.paneId, tabId, title)}
       onClose={view.canClose ? () => handles.closePane(view.paneId) : undefined}
       onForkSession={() => handles.splitTabIntoNewPane(view.paneId, view.pane.sessionId)}
-      onOpenTerminal={() => handles.openTerminalPane(view.paneId)}
+      terminalOwner={terminalOwnerFor(view.project, view.session)}
+      onOpenTerminal={() => tools.setComputerTab("terminal")}
       rightPanelOpen={tools.computer.open}
       onToggleRightPanel={tools.toggleComputerOpen}
       onRegisterHandle={(handle) => handles.registerPaneHandle(view.paneId, handle)}
       showHeader={!compact}
+      composerOnly={composerOnly}
+    />
+  );
+}, sameWorkspacePaneProps);
+
+export function renderWorkspacePane({
+  paneId,
+  state,
+  projects,
+  tools,
+  dispatch,
+  handles,
+  compact = false,
+  composerOnly = false,
+}: WorkspacePaneRenderContext) {
+  const view = selectWorkspacePaneView(paneId, state, projects);
+  if (!view) return null;
+
+  return (
+    <WorkspacePane
+      key={view.paneId}
+      view={view}
+      models={state.models}
+      modelsLoading={state.modelsLoading}
+      tools={tools}
+      dispatch={dispatch}
+      handles={handles}
+      compact={compact}
+      composerOnly={composerOnly}
     />
   );
 }

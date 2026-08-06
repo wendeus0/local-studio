@@ -3,16 +3,14 @@ import { join } from "node:path";
 import type { Recipe } from "../../models/types";
 import type { Config } from "../../../config/env";
 import {
-  getUnknownVllmExtraArgKeys as getUnknownVllmExtraArgumentKeys,
   isInternalRecipeKey,
   isJsonStringArgumentKey,
-  looksLikeNotesKey,
 } from "@local-studio/contracts/engine-args";
-import type { Logger } from "../../../core/logger";
-import { resolveBinary } from "../../../core/command";
-import { resolveVllmRecipePythonPath } from "../runtimes/vllm-python-path";
-import { managedLlamaServerPath } from "../runtimes/managed-llamacpp";
 import { getEngineSpec } from "../engine-spec";
+import { resolveRecipeGpuUuids } from "../../system/gpu-leases";
+import { getExtraArgument } from "../argument-utilities";
+
+export { getExtraArgument };
 
 export const normalizeJsonArgument = (value: unknown): unknown => {
   if (Array.isArray(value)) {
@@ -29,20 +27,45 @@ export const normalizeJsonArgument = (value: unknown): unknown => {
   }
   return value;
 };
-export const getExtraArgument = (extraArguments: Record<string, unknown>, key: string): unknown => {
-  if (Object.prototype.hasOwnProperty.call(extraArguments, key)) {
-    return extraArguments[key];
+
+export type ExtraArgumentSerializer = (flag: string, key: string, value: unknown) => string[];
+
+export const appendSerializedArguments = (
+  command: string[],
+  extraArguments: Record<string, unknown>,
+  serialize: ExtraArgumentSerializer,
+): string[] => {
+  for (const [key, value] of Object.entries(extraArguments)) {
+    if (isInternalRecipeKey(key)) continue;
+    const flag = `--${key.replace(/_/g, "-")}`;
+    if (command.includes(flag)) continue;
+    command.push(...serialize(flag, key, value));
   }
-  const kebab = key.replace(/_/g, "-");
-  if (Object.prototype.hasOwnProperty.call(extraArguments, kebab)) {
-    return extraArguments[kebab];
-  }
-  const snake = key.replace(/-/g, "_");
-  if (Object.prototype.hasOwnProperty.call(extraArguments, snake)) {
-    return extraArguments[snake];
-  }
-  return undefined;
+  return command;
 };
+
+const serializeExtraArgument: ExtraArgumentSerializer = (flag, key, value) => {
+  if (value === true) return [flag];
+  if (value === false) {
+    return key.replace(/-/g, "_").toLowerCase() === "enable_expert_parallelism" ? [] : [flag];
+  }
+  if (value === undefined || value === null) return [];
+  if (typeof value === "string" && isJsonStringArgumentKey(key)) {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        return [flag, JSON.stringify(normalizeJsonArgument(JSON.parse(trimmed) as unknown))];
+      } catch {
+        return [flag, value];
+      }
+    }
+  }
+  if (Array.isArray(value) || (value && typeof value === "object")) {
+    return [flag, JSON.stringify(normalizeJsonArgument(value))];
+  }
+  return [flag, String(value)];
+};
+
 export const getPythonPath = (recipe: Recipe): string | undefined => {
   if (recipe.python_path && existsSync(recipe.python_path)) {
     return recipe.python_path;
@@ -56,124 +79,10 @@ export const getPythonPath = (recipe: Recipe): string | undefined => {
   }
   return undefined;
 };
-export const getVllmPythonPath = (
-  recipe: Recipe,
-  dataDirectory?: string | null,
-): string | undefined => {
-  return resolveVllmRecipePythonPath(recipe.python_path, dataDirectory) ?? undefined;
-};
 export const appendExtraArguments = (
   command: string[],
   extraArguments: Record<string, unknown>,
-): string[] => {
-  for (const [key, value] of Object.entries(extraArguments)) {
-    const normalizedKey = key.replace(/-/g, "_").toLowerCase();
-    if (isInternalRecipeKey(key)) {
-      continue;
-    }
-    const flag = `--${key.replace(/_/g, "-")}`;
-    if (command.includes(flag)) {
-      continue;
-    }
-    if (value === true) {
-      command.push(flag);
-      continue;
-    }
-    if (value === false) {
-      if (!["enable_expert_parallelism", "enable-expert-parallelism"].includes(normalizedKey)) {
-        command.push(flag);
-      }
-      continue;
-    }
-    if (value === undefined || value === null) {
-      continue;
-    }
-    if (typeof value === "string" && isJsonStringArgumentKey(key)) {
-      const trimmed = value.trim();
-      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-        try {
-          const parsed = JSON.parse(trimmed) as unknown;
-          command.push(flag, JSON.stringify(normalizeJsonArgument(parsed)));
-          continue;
-        } catch {
-          command.push(flag, value);
-          continue;
-        }
-      }
-    }
-    if (Array.isArray(value) || (value && typeof value === "object")) {
-      command.push(flag, JSON.stringify(normalizeJsonArgument(value)));
-      continue;
-    }
-    command.push(flag, String(value));
-  }
-  return command;
-};
-
-/**
- * Filter `extraArguments` against the vLLM `serve` flag allowlist and pass the
- * remainder to `appendExtraArguments`. Unknown keys would otherwise be
- * forwarded verbatim, which crashes vLLM with `unrecognized arguments`
- * (real-world example: `benchmark_notes_20260622` blocks the
- * `glm-5-2-504b-term` recipe from booting).
- *
- * Behaviour:
- *   - Unknown keys are dropped unless `LOCAL_STUDIO_ALLOW_UNKNOWN_VLLM_EXTRA_ARGS`
- *     is set to `true` (escape hatch for forked vLLM builds outside the
- *     allowlist).
- *   - Each drop is logged via `logger` (or `console.warn` as a fallback) so the
- *     upstream recipe can be cleaned up.
- *   - Keys that look like free-form notes/annotations are advised to live
- *     under `description` / `metadata` instead.
- */
-export const appendVllmExtraArguments = (
-  command: string[],
-  extraArguments: Record<string, unknown>,
-  logger?: Logger,
-): string[] => {
-  const allowUnknown = process.env["LOCAL_STUDIO_ALLOW_UNKNOWN_VLLM_EXTRA_ARGS"] === "true";
-  if (allowUnknown) {
-    return appendExtraArguments(command, extraArguments);
-  }
-  const unknown = getUnknownVllmExtraArgumentKeys(extraArguments);
-  if (unknown.length === 0) {
-    return appendExtraArguments(command, extraArguments);
-  }
-  const filtered: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(extraArguments)) {
-    if (!unknown.includes(key)) {
-      filtered[key] = value;
-    }
-  }
-  const strict = process.env["LOCAL_STUDIO_STRICT_VLLM_EXTRA_ARGS"] === "true";
-  for (const key of unknown) {
-    const noteLike = looksLikeNotesKey(key);
-    const detail: Record<string, unknown> = {
-      key,
-      hint: noteLike
-        ? "vLLM has no such flag; store notes under recipe.description or recipe.metadata"
-        : "Add the flag to KNOWN_VLLM_EXTRA_ARG_KEYS in shared/contracts/engine-args.ts, or set LOCAL_STUDIO_ALLOW_UNKNOWN_VLLM_EXTRA_ARGS=true as a temporary escape hatch",
-    };
-    if (logger) {
-      if (strict) {
-        logger.error(
-          "[vllm-extra-args] dropping unknown vLLM extra_args key in strict mode",
-          detail,
-        );
-      } else {
-        logger.warn("[vllm-extra-args] dropping unknown vLLM extra_args key", detail);
-      }
-    } else if (strict) {
-      console.error(
-        "[vllm-extra-args] dropping unknown vLLM extra_args key in strict mode",
-        detail,
-      );
-    } else {
-      console.warn("[vllm-extra-args] dropping unknown vLLM extra_args key", detail);
-    }
-  }
-  return appendExtraArguments(command, filtered);
-};
+): string[] => appendSerializedArguments(command, extraArguments, serializeExtraArgument);
 
 const normalizeLaunchCommand = (command: string): string => {
   return command
@@ -243,9 +152,6 @@ const getLaunchCommandOverride = (recipe: Recipe): string[] | null => {
   return command.length > 0 ? command : null;
 };
 
-/** In-container path to the vLLM CLI for forked Docker images. */
-export const CONTAINER_VLLM_BIN = "/opt/venv/bin/vllm";
-const DOCKER_JIT_MOUNT = "/cache/jit";
 
 /**
  * Env keys that must NOT be forwarded into the container; the image's own baked
@@ -255,15 +161,11 @@ const DOCKER_JIT_MOUNT = "/cache/jit";
  * NCCL build treats an empty `NCCL_GRAPH_FILE` as a fatal error, so recipes set
  * it to `/dev/null` and that override must reach the container.
  */
-const DOCKER_ENV_SKIP_KEYS = new Set(["NCCL_GRAPH_DUMP_FILE", "VLLM_B12X_MLA_EXTEND_MAX_CHUNKS"]);
-
-/** Read the pinned Docker image for a recipe, if any (`extra_args.docker_image`). */
-export const getDockerImage = (recipe: Recipe): string | null => {
-  const value =
-    getExtraArgument(recipe.extra_args, "docker_image") ??
-    getExtraArgument(recipe.extra_args, "docker-image");
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-};
+const DOCKER_ENV_SKIP_KEYS = new Set([
+  "CUDA_VISIBLE_DEVICES",
+  "NCCL_GRAPH_DUMP_FILE",
+  "VLLM_B12X_MLA_EXTEND_MAX_CHUNKS",
+]);
 
 export const sanitizeDockerName = (value: string): string => {
   const cleaned = value.replace(/[^a-zA-Z0-9_.-]/g, "-").replace(/^[^a-zA-Z0-9]+/, "");
@@ -287,6 +189,16 @@ const buildDockerEnvironmentFlags = (recipe: Recipe): string[] => {
   addEnvironment(recipe.env_vars);
   addEnvironment(getExtraArgument(recipe.extra_args, "env_vars"));
   return flags;
+};
+
+export const buildDockerGpuFlags = (recipe: Recipe): string[] => {
+  const resolution = resolveRecipeGpuUuids(recipe, []);
+  const selector = resolution.selector?.trim() || "";
+  if (resolution.source === "recipe" && !selector) return [];
+  const request = selector.includes(",") ? `"device=${selector}"` : `device=${selector}`;
+  return selector
+    ? ["--gpus", request, "-e", `CUDA_VISIBLE_DEVICES=${selector}`]
+    : ["--gpus", "all"];
 };
 
 export interface DockerRunOptions {
@@ -326,15 +238,13 @@ export const buildDockerRunArguments = ({
     "--rm",
     "--name",
     name,
-    "--gpus",
-    "all",
+    ...buildDockerGpuFlags(recipe),
     "--network",
     "host",
     "--ipc",
     "host",
     "--shm-size",
     "32g",
-    "--privileged",
     "--ulimit",
     "memlock=-1",
     "--ulimit",
@@ -353,99 +263,17 @@ export const buildDockerRunArguments = ({
   return flags;
 };
 
-/**
- * Wrap a vLLM `serve` invocation so it runs inside a pinned Docker image
- * (`extra_args.docker_image`). Used for forked vLLM builds (e.g. voipmonitor
- * B12X) that cannot be installed into the host venv. A per-recipe named
- * volume persists the JIT compile cache across restarts.
- */
-export const wrapVllmInDocker = (recipe: Recipe, image: string, inner: string[]): string[] => {
-  const jitVolume = `local-studio-jit-${sanitizeDockerName(recipe.id)}`;
-  return buildDockerRunArguments({
-    recipe,
-    image,
-    inner,
-    extraEnv: {
-      XDG_CACHE_HOME: DOCKER_JIT_MOUNT,
-      CUDA_CACHE_PATH: DOCKER_JIT_MOUNT,
-      VLLM_CACHE_DIR: `${DOCKER_JIT_MOUNT}/vllm`,
-      TRITON_CACHE_DIR: `${DOCKER_JIT_MOUNT}/triton`,
-    },
-    extraVolumes: [`${jitVolume}:${DOCKER_JIT_MOUNT}`],
-  });
-};
-
-const executableBaseName = (value: string): string => {
-  return value.split(/[\\/]/).filter(Boolean).at(-1)?.toLowerCase() ?? value.toLowerCase();
-};
-const isAllowedLlamaServerBinary = (value: string): boolean => {
-  const name = executableBaseName(value);
-  return name === "llama-server" || name === "llama-server.exe";
-};
-const rejectPathTraversal = (value: string, label: string): void => {
-  if (value.split(/[\\/]+/).includes("..")) {
-    throw new Error(`Invalid ${label}: path traversal is not allowed`);
-  }
-};
-export const buildBackendCommand = (recipe: Recipe, config: Config): string[] => {
+export const buildBackendCommand = (
+  recipe: Recipe,
+  config: Config,
+  managedGpuSelection = false,
+): string[] => {
   const launchCommand = getLaunchCommandOverride(recipe);
   if (launchCommand) {
+    if (managedGpuSelection) {
+      throw new Error("Custom launch commands cannot use managed GPU selection");
+    }
     return launchCommand;
   }
   return getEngineSpec(recipe.backend).buildCommand(recipe, config);
-};
-export const resolveLlamaBinary = (recipe: Recipe, config: Config): string => {
-  const override = getExtraArgument(recipe.extra_args, "llama_bin") ?? config.llama_bin;
-  if (typeof override === "string" && override.trim()) {
-    rejectPathTraversal(override, "llama_bin");
-    if (!isAllowedLlamaServerBinary(override)) {
-      throw new Error("Invalid llama_bin: only llama-server executables are allowed");
-    }
-    const resolved = resolveBinary(override);
-    if (resolved) {
-      return resolved;
-    }
-    throw new Error(`Invalid llama_bin: executable "${override}" was not found`);
-  }
-  const managed = managedLlamaServerPath(config);
-  return resolveBinary("llama-server") ?? (existsSync(managed) ? managed : "llama-server");
-};
-export const appendLlamacppArguments = (
-  command: string[],
-  extraArguments: Record<string, unknown>,
-): string[] => {
-  for (const [key, value] of Object.entries(extraArguments)) {
-    if (isInternalRecipeKey(key)) {
-      continue;
-    }
-    const flag = `--${key.replace(/_/g, "-")}`;
-    if (command.includes(flag)) {
-      continue;
-    }
-    if (value === true) {
-      command.push(flag);
-      continue;
-    }
-    if (value === false) {
-      continue;
-    }
-    if (value === undefined || value === null || value === "") {
-      continue;
-    }
-    if (Array.isArray(value)) {
-      for (const entry of value) {
-        if (entry === undefined || entry === null || entry === "") {
-          continue;
-        }
-        command.push(flag, String(entry));
-      }
-      continue;
-    }
-    if (typeof value === "object") {
-      command.push(flag, JSON.stringify(value));
-      continue;
-    }
-    command.push(flag, String(value));
-  }
-  return command;
 };

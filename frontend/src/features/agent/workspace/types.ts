@@ -1,8 +1,8 @@
-import type { ActiveAgentSessionSnapshot } from "@/features/agent/active-sessions";
 import type { AgentModel } from "@/features/agent/models";
 import type { Project } from "@/features/agent/projects/types";
 import type { Session, SessionId, SessionsMap } from "@/features/agent/runtime/types";
 import type { Layout, PaneId } from "@/features/agent/workspace/layout";
+import type { SessionDrafts } from "@/features/agent/workspace/session-drafts";
 
 export type { PaneId } from "@/features/agent/workspace/layout";
 export type { SessionId } from "@/features/agent/runtime/types";
@@ -17,23 +17,11 @@ export type ChatPaneState = {
   sessionId: SessionId;
 };
 
-export type TerminalPaneState = {
-  kind: "terminal";
-  mountKey: string;
-  cwd: string | null;
-  title: string;
-  ownerSessionId: SessionId | null;
-  ownerPiSessionId: string | null;
-  /** Project the terminal belongs to — groups it under a sidebar project row. */
-  projectId?: string | null;
-  /** When the terminal pane was first created (sidebar row ordering). */
-  createdAt?: string;
-};
-
-export type PaneState = ChatPaneState | TerminalPaneState;
+export type PaneState = ChatPaneState;
 
 export type WorkspaceState = {
   sessions: SessionsMap;
+  sessionDrafts: SessionDrafts;
   models: AgentModel[];
   selectedModel: string;
   modelsLoading: boolean;
@@ -44,15 +32,7 @@ export type WorkspaceState = {
   error: string;
   hydrated: boolean;
   lastHandledNavKey: string;
-  /**
-   * True when the layout/panes were rehydrated from durable pane-state
-   * localStorage (PANE_STATE_KEY). Authoritative: it tells hydrateActiveSessions
-   * to trust the restored layout and NOT rebuild panes from active-chat
-   * snapshots — otherwise a terminal main pane (which restores zero chat
-   * sessions) would be clobbered with a chat pane. Optional so pre-existing
-   * WorkspaceState literals (tests, quick panel) default to undefined/false.
-   */
-  paneStateRestored?: boolean;
+  lastHandledNavIntent: string;
 };
 
 export type WorkspaceSessionPayload = {
@@ -90,7 +70,12 @@ export type WorkspaceAction =
       tab: Session;
     }
   | { type: "focusPane"; paneId: PaneId }
-  | { type: "focusPaneSession"; paneId: PaneId; sessionId: SessionId }
+  | {
+      type: "focusPaneSession";
+      paneId: PaneId;
+      sessionId: SessionId;
+      replaceWorkspace?: boolean;
+    }
   | { type: "renameTab"; paneId: PaneId; tabId: SessionId; title: string }
   | {
       type: "splitTab";
@@ -100,28 +85,9 @@ export type WorkspaceAction =
       tab: Session;
     }
   | { type: "closePane"; paneId: PaneId }
-  | { type: "openTerminalPane"; sourcePaneId?: PaneId }
-  | {
-      type: "openProjectTerminal";
-      cwd: string | null;
-      newPaneId: PaneId;
-      projectId?: string | null;
-    }
-  | {
-      type: "focusTerminalPane";
-      mountKey: string;
-      cwd: string | null;
-      title?: string;
-      projectId?: string | null;
-      newPaneId: PaneId;
-    }
-  | {
-      type: "splitTerminalPane";
-      sourcePaneId: PaneId;
-      newPaneId: PaneId;
-      direction: "vertical" | "horizontal";
-    }
   | { type: "setPaneSession"; paneId: PaneId; session: Session }
+  | { type: "setDetachedSession"; session: Session }
+  | { type: "removeDetachedSession"; sessionId: SessionId }
   | {
       type: "patchSession";
       sessionId: SessionId;
@@ -132,21 +98,13 @@ export type WorkspaceAction =
   | {
       type: "urlNavRequested";
       key: string;
+      intent?: string;
       project: Project | null;
       sessionId?: string | null;
       sessionTitle?: string;
       newSession?: boolean;
       split?: boolean;
       paneId: PaneId;
-      terminal?: boolean;
       replaceWorkspace?: boolean;
-      /** Reattach target: focus/recreate the terminal pane with this mountKey. */
-      terminalMountKey?: string;
       tab: Session;
-    }
-  | {
-      type: "hydrateActiveSessions";
-      snapshots: ActiveAgentSessionSnapshot[];
-      projects: Project[];
-      hasExplicitSessionNav?: boolean;
     };

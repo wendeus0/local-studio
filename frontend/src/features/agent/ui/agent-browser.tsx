@@ -64,6 +64,7 @@ export function AgentBrowser({
   isElectron,
 }: Props) {
   const webviewRef = useRef<WebviewElement | null>(null);
+  const [initialWebviewUrl] = useState(url);
   // Live mode is the server-side screencast; it is the default everywhere and
   // falls back to reading mode only when the host has no Chromium.
   const [readingMode, setReadingMode] = useState(false);
@@ -185,7 +186,7 @@ export function AgentBrowser({
           type="button"
           onClick={handleBack}
           disabled={readingMode || navState?.canGoBack === false}
-          className="rounded p-1 text-(--dim) hover:bg-(--surface) hover:text-(--fg) disabled:opacity-30"
+          className="rounded p-1 text-(--dim) hover:bg-(--hover) hover:text-(--fg) disabled:opacity-30"
           title="Back"
           aria-label="Back"
         >
@@ -195,7 +196,7 @@ export function AgentBrowser({
           type="button"
           onClick={handleForward}
           disabled={readingMode || navState?.canGoForward === false}
-          className="rounded p-1 text-(--dim) hover:bg-(--surface) hover:text-(--fg) disabled:opacity-30"
+          className="rounded p-1 text-(--dim) hover:bg-(--hover) hover:text-(--fg) disabled:opacity-30"
           title="Forward"
           aria-label="Forward"
         >
@@ -204,7 +205,7 @@ export function AgentBrowser({
         <button
           type="button"
           onClick={handleReload}
-          className="rounded p-1 text-(--dim) hover:bg-(--surface) hover:text-(--fg)"
+          className="rounded p-1 text-(--dim) hover:bg-(--hover) hover:text-(--fg)"
           title="Reload"
           aria-label="Reload"
         >
@@ -245,7 +246,7 @@ export function AgentBrowser({
           onPointerDown={(event) => event.stopPropagation()}
           onMouseDown={(event) => event.stopPropagation()}
           onClick={onClose}
-          className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-md text-(--dim) hover:bg-(--surface) hover:text-(--fg)"
+          className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-md text-(--dim) hover:bg-(--hover) hover:text-(--fg)"
           title="Close"
           aria-label="Close browser"
         >
@@ -288,7 +289,7 @@ export function AgentBrowser({
                 ref={(node: WebviewElement | null) => {
                   webviewRef.current = node;
                 }}
-                src={url}
+                src={initialWebviewUrl}
                 // @ts-expect-error — Electron-specific attribute.
                 allowpopups="true"
                 className="size-full"

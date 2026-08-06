@@ -2,6 +2,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
   Code,
+  File,
   FolderTree,
   Monitor,
   Minus,
@@ -15,7 +16,7 @@ import { useToolSelections, useToolsActions } from "@/features/agent/tools/conte
 import type { FileComment, FsEntry } from "@/features/agent/filesystem-types";
 import { FileViewer } from "@/features/agent/ui/filesystem-file-viewer";
 import { RenderedPreview, previewKindForOpenFile } from "@/features/agent/ui/filesystem-preview";
-import { Breadcrumb, TreeFileList } from "@/features/agent/ui/filesystem-tree";
+import { Breadcrumb, fileTone, TreeFileList } from "@/features/agent/ui/filesystem-tree";
 import { useFilesystemPanelEffects } from "@/features/agent/ui/filesystem-panel-effects";
 
 type Props = { cwd: string | null };
@@ -233,8 +234,8 @@ export function FilesystemPanel({ cwd }: Props) {
   return (
     <div className="relative flex h-full min-h-0 flex-row-reverse bg-(--color-panel)">
       {fileListOpen ? (
-        <div className="flex w-[236px] shrink-0 flex-col border-l border-(--border)/80 bg-(--sidebar-bg)">
-          <div className="flex h-9 shrink-0 items-center border-b border-(--border)/80">
+        <div className="flex w-[236px] shrink-0 flex-col border-l border-(--border) bg-(--sidebar-bg)">
+          <div className="flex h-9 shrink-0 items-center border-b border-(--border)">
             <div className="min-w-0 flex-1">
               <Breadcrumb relPath={relPath} onRoot={() => setRelPath("")} />
             </div>
@@ -248,14 +249,14 @@ export function FilesystemPanel({ cwd }: Props) {
               <Minus className="h-3.5 w-3.5" />
             </button>
           </div>
-          <div className="flex shrink-0 border-b border-(--border)/70 px-2 py-2">
+          <div className="flex shrink-0 border-b border-(--border) px-2 py-2">
             <input
               ref={searchRef}
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search files…"
-              className="h-7 w-full rounded-md border border-(--border)/80 bg-(--color-input) px-2 text-[length:var(--fs-sm)] text-(--fg) outline-none placeholder:text-(--dim)/75 focus:border-(--border-hover)"
+              className="h-7 w-full rounded-md border border-(--border) bg-(--color-input) px-2 text-[length:var(--fs-sm)] text-(--fg) outline-none placeholder:text-(--dim)/75 focus:border-(--border-hover)"
               spellCheck={false}
             />
             {searchQuery && (
@@ -295,7 +296,7 @@ export function FilesystemPanel({ cwd }: Props) {
               <button
                 type="button"
                 onClick={() => setFileListOpen(true)}
-                className="inline-flex h-7 items-center gap-1.5 rounded-md border border-(--border)/80 bg-(--color-input) px-2 text-[length:var(--fs-xs)] text-(--dim) hover:text-(--fg)"
+                className="inline-flex h-7 items-center gap-1.5 rounded-md border border-(--border) bg-(--color-input) px-2 text-[length:var(--fs-xs)] text-(--dim) hover:text-(--fg)"
               >
                 <FolderTree className="h-3.5 w-3.5" />
                 Show files
@@ -313,16 +314,20 @@ export function FilesystemPanel({ cwd }: Props) {
           </div>
         ) : (
           <>
-            <div className="flex h-9 shrink-0 items-center justify-between gap-1 border-b border-(--border)/80 bg-(--color-header) px-2">
-              <div className="min-w-0 flex-1 truncate font-mono text-[length:var(--fs-sm)] text-(--dim)">
-                {openFile}
+            <div className="flex h-9 shrink-0 items-center justify-between gap-1 border-b border-(--border) bg-(--color-header) pr-2">
+              <div
+                className="relative flex h-full min-w-0 max-w-[55%] items-center gap-1.5 border-r border-(--border) bg-(--color-panel) px-3 text-[length:var(--fs-sm)] text-(--fg) after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-(--link)"
+                title={openFile}
+              >
+                <File className={`h-3.5 w-3.5 shrink-0 ${fileTone(openFile)}`} />
+                <span className="truncate font-mono">{openFile.split("/").pop() ?? openFile}</span>
               </div>
               <div className="flex shrink-0 items-center gap-0.5">
                 {comments.length > 0 && (
                   <button
                     type="button"
                     onClick={attachCommentsToChat}
-                    className="mr-1 inline-flex h-6 items-center gap-1 rounded-md border border-(--border)/80 bg-(--color-input) px-1.5 text-[length:var(--fs-xs)] text-(--dim) hover:text-(--fg)"
+                    className="mr-1 inline-flex h-6 items-center gap-1 rounded-md border border-(--border) bg-(--color-input) px-1.5 text-[length:var(--fs-xs)] text-(--dim) hover:text-(--fg)"
                     title="Attach this file's comments to the chat as context"
                   >
                     <MessageSquarePlus className="h-3 w-3" />
@@ -332,7 +337,7 @@ export function FilesystemPanel({ cwd }: Props) {
                 <button
                   type="button"
                   onClick={() => setViewMode("edit")}
-                  className={`mr-1 inline-flex h-6 items-center gap-1 rounded-md border border-(--border)/80 bg-(--color-input) px-1.5 text-[length:var(--fs-xs)] ${viewMode === "edit" ? "text-(--fg)" : "text-(--dim) hover:text-(--fg)"}`}
+                  className={`mr-1 inline-flex h-6 items-center gap-1 rounded-md border border-(--border) bg-(--color-input) px-1.5 text-[length:var(--fs-xs)] ${viewMode === "edit" ? "text-(--fg)" : "text-(--dim) hover:text-(--fg)"}`}
                   title="Edit file"
                 >
                   <SquarePen className="h-3 w-3" />
@@ -341,14 +346,14 @@ export function FilesystemPanel({ cwd }: Props) {
                   type="button"
                   onClick={() => void saveFile()}
                   disabled={!dirty || savingFile || fileTruncated}
-                  className="mr-1 inline-flex h-6 items-center gap-1 rounded-md border border-(--border)/80 bg-(--color-input) px-1.5 text-[length:var(--fs-xs)] text-(--dim) hover:text-(--fg) disabled:cursor-not-allowed disabled:opacity-40"
+                  className="mr-1 inline-flex h-6 items-center gap-1 rounded-md border border-(--border) bg-(--color-input) px-1.5 text-[length:var(--fs-xs)] text-(--dim) hover:text-(--fg) disabled:cursor-not-allowed disabled:opacity-40"
                   title={dirty ? "Save file" : "No changes to save"}
                 >
                   <Save className="h-3 w-3" />
                   {savingFile ? "Saving" : "Save"}
                 </button>
                 {previewKind && (
-                  <div className="mr-1 flex items-center gap-0.5 rounded-md border border-(--border)/80 bg-(--color-input) p-0.5">
+                  <div className="mr-1 flex items-center gap-0.5 rounded-md border border-(--border) bg-(--color-input) p-0.5">
                     <button
                       type="button"
                       onClick={() => setViewMode("preview")}
@@ -365,7 +370,7 @@ export function FilesystemPanel({ cwd }: Props) {
                     </button>
                   </div>
                 )}
-                <div className="flex items-center gap-0.5 rounded-md border border-(--border)/80 bg-(--color-input) p-0.5">
+                <div className="flex items-center gap-0.5 rounded-md border border-(--border) bg-(--color-input) p-0.5">
                   <button
                     type="button"
                     onClick={() => setFontSize(Math.max(8, fontSize - 1))}
@@ -390,7 +395,7 @@ export function FilesystemPanel({ cwd }: Props) {
                   <button
                     type="button"
                     onClick={() => setFileListOpen(true)}
-                    className="ml-1 inline-flex h-6 items-center gap-1 rounded-md border border-(--border)/80 bg-(--color-input) px-1.5 text-[length:var(--fs-xs)] text-(--dim) hover:text-(--fg)"
+                    className="ml-1 inline-flex h-6 items-center gap-1 rounded-md border border-(--border) bg-(--color-input) px-1.5 text-[length:var(--fs-xs)] text-(--dim) hover:text-(--fg)"
                     title="Show file list"
                     aria-label="Show file list"
                   >

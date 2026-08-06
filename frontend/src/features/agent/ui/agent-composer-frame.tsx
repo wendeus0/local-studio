@@ -46,6 +46,7 @@ export type AgentComposerFrameProps = {
   mention: ComposerMention | null;
   mentionIndex: number;
   mentionRows: MentionRow[];
+  modelSupportsVision: boolean;
   modelSelector?: ReactNode;
   onAbortTurn: () => void;
   onAttachFiles: (files: FileList | null) => void;
@@ -59,7 +60,6 @@ export type AgentComposerFrameProps = {
   onInitGit?: () => void;
   onOpenStatus: () => void;
   onQueueExpandedChange: (expanded: boolean) => void;
-  onQueueMessage: () => void;
   onRemoveAttachment: (id: string) => void;
   onRemoveLoadedContext: (kind: LoadedContextKind, id: string) => void;
   onRemoveQueued: (queueId: string) => void;
@@ -77,6 +77,8 @@ export type AgentComposerFrameProps = {
   selectedSkills: ComposerSkillRef[];
   status?: string;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
+  floating?: boolean;
+  dense?: boolean;
 };
 
 export function AgentComposerFrame({
@@ -95,6 +97,7 @@ export function AgentComposerFrame({
   mention,
   mentionIndex,
   mentionRows,
+  modelSupportsVision,
   modelSelector,
   onAbortTurn,
   onAttachFiles,
@@ -108,7 +111,6 @@ export function AgentComposerFrame({
   onInitGit,
   onOpenStatus,
   onQueueExpandedChange,
-  onQueueMessage,
   onRemoveAttachment,
   onRemoveLoadedContext,
   onRemoveQueued,
@@ -126,9 +128,21 @@ export function AgentComposerFrame({
   selectedSkills,
   status,
   textareaRef,
+  floating = false,
+  dense = false,
 }: AgentComposerFrameProps) {
   return (
-    <form onSubmit={onSubmit} className="shrink-0 bg-(--agent-bg) px-6 pb-2 pt-2.5">
+    <form
+      onSubmit={onSubmit}
+      className={cx(
+        "relative z-[100] shrink-0",
+        floating
+          ? "bg-transparent p-[calc(var(--space-base)*2)]"
+          : dense
+            ? "bg-(--agent-bg) px-3 pb-1 pt-1.5"
+            : "bg-(--agent-bg) px-6 pb-2 pt-2.5",
+      )}
+    >
       <AgentQueuePanel
         items={queueItems}
         expanded={queueExpanded}
@@ -143,9 +157,7 @@ export function AgentComposerFrame({
         onDragLeave={onComposerDragLeave}
         onDrop={onComposerDrop}
         className={cx(
-          // The Codex composer: a lifted charcoal surface over a hairline
-          // border, with a soft shadow and compact radius.
-          "mx-auto w-full max-w-[var(--composer-w)] overflow-visible rounded-[var(--composer-radius)] border border-(--border) bg-(--composer) shadow-[var(--composer-shadow)] transition-colors",
+          "mx-auto w-full max-w-[var(--composer-w)] overflow-visible rounded-[var(--composer-radius)] border border-(--composer-border) bg-(--composer) shadow-[var(--composer-shadow)] transition-colors",
           composerDragActive && "outline outline-1 outline-(--link)/50",
         )}
       >
@@ -165,13 +177,18 @@ export function AgentComposerFrame({
           activeIndex={mentionIndex}
           onSelect={onSelectMention}
         />
-        <AgentAttachmentTray attachments={attachments} onRemove={onRemoveAttachment} />
+        <AgentAttachmentTray
+          attachments={attachments}
+          modelSupportsVision={modelSupportsVision}
+          onRemove={onRemoveAttachment}
+        />
         <AgentComposerTextArea
           inputRef={textareaRef}
           value={input}
           onPaste={onComposerPaste}
           onChange={onComposerChange}
           onKeyDown={onComposerKeyDown}
+          placeholder={floating ? "Ask anything" : undefined}
         />
         <AgentComposerActions
           fileInputRef={fileInputRef}
@@ -187,13 +204,10 @@ export function AgentComposerFrame({
           onToggleBrowserTool={onToggleBrowserTool}
           canvasEnabled={canvasEnabled}
           onToggleCanvas={onToggleCanvas}
-          onQueueMessage={onQueueMessage}
           onAbortTurn={onAbortTurn}
           modelSelector={modelSelector}
         />
       </div>
-      {/* Codex keeps the model picker inside the composer footer; the status
-          line below carries workspace context (cwd, branch, diff, tokens). */}
       <AgentComposerStatusBar
         cwd={cwd}
         gitBranch={gitBranch}

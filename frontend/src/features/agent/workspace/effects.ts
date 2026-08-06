@@ -1,33 +1,29 @@
-import type { ActiveAgentSessionSnapshot } from "@/features/agent/active-sessions";
 import { Effect } from "effect";
 import { cleanSessionTitle } from "@/features/agent/messages/helpers";
 import { findPaneByPiSessionId, paneSessionId } from "@/features/agent/runtime/selectors";
-import type { Project } from "@/features/agent/projects/types";
 import type { Session, SessionId } from "@/features/agent/runtime/types";
-import { uniqueTerminalKeys, type TerminalOwner } from "@/features/agent/terminal-owners";
+import {
+  markSessionActivitySeen,
+  publishOpenSessions,
+  type OpenAgentSession,
+} from "@/features/agent/session-index";
 import type { ToolSelection } from "@/features/agent/tools/types";
 import type { ComposerSkillRef } from "@/features/agent/composer-context";
 import type {
   AgentModel,
   PaneId,
-  TerminalPaneState,
   WorkspaceAction,
   WorkspaceState,
 } from "@/features/agent/workspace/types";
 import {
-  loadPersistedActiveAgentSessions,
   sessionMetaForPersistence,
   setupWarningFromPiCheck,
   type WorkspaceStorage,
 } from "@/features/agent/workspace/store";
-import { writeActiveSessions, writePaneState } from "@/features/agent/workspace/persistence";
+import { writePaneState } from "@/features/agent/workspace/persistence";
+import { writeSessionDrafts } from "@/features/agent/workspace/session-drafts";
 import { writeTranscriptSnapshot } from "@/features/agent/workspace/transcript-cache";
-import {
-  ACTIVE_AGENT_SESSIONS_EVENT,
-  PROJECTS_LOADED_EVENT,
-  SESSIONS_CHANGED_EVENT,
-} from "@/lib/workspace-events";
-import { isRecord } from "@/lib/guards";
+import { SESSIONS_CHANGED_EVENT } from "@/lib/workspace-events";
 
 const EMPTY_SELECTION: ToolSelection = {
   skills: [],
@@ -43,10 +39,7 @@ export type WorkspaceApi = {
 
 export type WorkspaceWindow = {
   Event: typeof Event;
-  CustomEvent: typeof CustomEvent;
   dispatchEvent: (event: Event) => boolean;
-  addEventListener: Window["addEventListener"];
-  removeEventListener: Window["removeEventListener"];
   setTimeout?: (handler: () => void, timeout: number) => unknown;
 };
 
@@ -58,12 +51,7 @@ export type WorkspaceEffectDeps = {
   api: WorkspaceApi;
   dispatch?: WorkspaceDispatch;
   queueReplay: (paneId: PaneId, piSessionId: string) => void;
-  /** Resolve a project by id from the projects context (workspace doesn't own project state). */
-  findProjectById?: (id: string) => Project | null;
-  /** Resolve a session's tool selection from the tools context. */
   selectionFor?: (sessionId: SessionId) => ToolSelection;
-  closeTerminalOwner?: (mountKey: string) => void;
-  rememberTerminalOwner?: (owner: TerminalOwner) => void;
 };
 
 const PANE_STATE_ACTIONS = new Set<WorkspaceAction["type"]>([
@@ -75,11 +63,6 @@ const PANE_STATE_ACTIONS = new Set<WorkspaceAction["type"]>([
   "renameTab",
   "splitTab",
   "closePane",
-  "openTerminalPane",
-  "openProjectTerminal",
-  "focusTerminalPane",
-  "splitTerminalPane",
-  "hydrateActiveSessions",
   "urlNavRequested",
 ]);
 
@@ -90,9 +73,10 @@ const SESSIONS_CHANGED_ACTIONS = new Set<WorkspaceAction["type"]>([
   "splitTab",
   "closePane",
   "setPaneSession",
+  "setDetachedSession",
+  "removeDetachedSession",
   "patchSession",
   "patchActiveTab",
-  "hydrateActiveSessions",
   "notifySessionsChanged",
   "urlNavRequested",
 ]);
@@ -105,42 +89,6 @@ const METADATA_PATCH_ACTIONS = new Set<WorkspaceAction["type"]>([
 
 function dispatchEvent(deps: WorkspaceEffectDeps, type: string): void {
   deps.window.dispatchEvent(new deps.window.Event(type));
-}
-
-function dispatchCustomEvent<T>(deps: WorkspaceEffectDeps, type: string, detail: T): void {
-  deps.window.dispatchEvent(new deps.window.CustomEvent<T>(type, { detail }));
-}
-
-function eventDetail(event: Event): unknown {
-  return "detail" in event ? event.detail : undefined;
-}
-
-export function subscribeWorkspaceWindowEvents(
-  workspaceWindow: WorkspaceWindow,
-  dispatch: WorkspaceDispatch,
-): () => void {
-  // Fired by ProjectsProvider once its first load settles. We hold off on
-  // hydrating active-session snapshots until then so we can filter sessions
-  // whose project is no longer installed.
-  const onProjectsLoaded = (event: Event) => {
-    const detail = eventDetail(event);
-    const projects =
-      isRecord(detail) && Array.isArray(detail.projects) ? (detail.projects as Project[]) : [];
-    const params =
-      typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
-    const restoreWorkspace = params?.get("restore") !== "0";
-    dispatch({
-      type: "hydrateActiveSessions",
-      snapshots: restoreWorkspace ? loadPersistedActiveAgentSessions() : [],
-      projects,
-      hasExplicitSessionNav:
-        !restoreWorkspace || Boolean(params?.get("session") || params?.get("new")),
-    });
-  };
-
-  workspaceWindow.addEventListener(PROJECTS_LOADED_EVENT, onProjectsLoaded);
-
-  return () => workspaceWindow.removeEventListener(PROJECTS_LOADED_EVENT, onProjectsLoaded);
 }
 
 function scheduleSessionsRefresh(deps: WorkspaceEffectDeps): void {
@@ -165,39 +113,48 @@ function runInitialApiEffects(state: WorkspaceState, deps: WorkspaceEffectDeps):
     : Effect.succeed(null);
 
   if (deps.api.loadModels) {
-    deps.dispatch?.({ type: "setModelsLoading", loading: true });
-    deps.dispatch?.({ type: "setError", error: "" });
-    void Effect.runPromise(
-      Effect.gen(function* () {
-        const payload = yield* Effect.tryPromise({
-          try: () => deps.api.loadModels?.() ?? Promise.resolve([]),
-          catch: (error) => error,
-        });
-        const normalized = normalizeModelsPayload(payload);
-        if (normalized.error) return yield* Effect.fail(new Error(normalized.error));
-        deps.dispatch?.({ type: "setModels", models: normalized.models });
-        if (normalized.models.length > 0) {
-          deps.dispatch?.({ type: "setSetupWarning", warning: "" });
-        } else {
-          const setupPayload = yield* loadSetupChecksEffect;
-          const pi = setupPayload?.checks?.find((check) => check.id === "pi");
-          deps.dispatch?.({
-            type: "setSetupWarning",
-            warning: setupWarningFromPiCheck(pi, false),
+    // Retry quietly with backoff: transient controller/network failures should
+    // resolve themselves without the user having to reload the page. The error
+    // notice stays visible (dismissible) until an attempt succeeds.
+    const attemptLoadModels = (attempt: number): void => {
+      deps.dispatch?.({ type: "setModelsLoading", loading: true });
+      if (attempt === 0) deps.dispatch?.({ type: "setError", error: "" });
+      void Effect.runPromise(
+        Effect.gen(function* () {
+          const payload = yield* Effect.tryPromise({
+            try: () => deps.api.loadModels?.() ?? Promise.resolve([]),
+            catch: (error) => error,
           });
-        }
-      }).pipe(
-        Effect.catch((error) =>
-          Effect.sync(() => {
+          const normalized = normalizeModelsPayload(payload);
+          if (normalized.error) return yield* Effect.fail(new Error(normalized.error));
+          deps.dispatch?.({ type: "setError", error: "" });
+          deps.dispatch?.({ type: "setModels", models: normalized.models });
+          if (normalized.models.length > 0) {
+            deps.dispatch?.({ type: "setSetupWarning", warning: "" });
+          } else {
+            const setupPayload = yield* loadSetupChecksEffect;
+            const pi = setupPayload?.checks?.find((check) => check.id === "pi");
             deps.dispatch?.({
-              type: "setError",
-              error: error instanceof Error ? error.message : "Failed to load models",
+              type: "setSetupWarning",
+              warning: setupWarningFromPiCheck(pi, false),
             });
-            deps.dispatch?.({ type: "setModelsLoading", loading: false });
-          }),
+          }
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.sync(() => {
+              deps.dispatch?.({
+                type: "setError",
+                error: error instanceof Error ? error.message : "Failed to load models",
+              });
+              deps.dispatch?.({ type: "setModelsLoading", loading: false });
+              const delay = Math.min(5_000 * 2 ** attempt, 60_000);
+              deps.window.setTimeout?.(() => attemptLoadModels(attempt + 1), delay);
+            }),
+          ),
         ),
-      ),
-    );
+      );
+    };
+    attemptLoadModels(0);
   } else if (deps.api.loadSetupChecks) {
     void Effect.runPromise(
       loadSetupChecksEffect.pipe(
@@ -213,61 +170,52 @@ function runInitialApiEffects(state: WorkspaceState, deps: WorkspaceEffectDeps):
   }
 }
 
-function activeSessionSnapshot(
+function openSessionSnapshot(
   state: WorkspaceState,
   tab: Session,
   selectionFor: (id: SessionId) => ToolSelection,
   paneId: string,
   focused: boolean,
-): ActiveAgentSessionSnapshot {
+): OpenAgentSession {
   const selection = selectionFor(tab.id);
   const usedSkills = usedSkillsForSession(tab);
   return {
+    id: tab.id,
+    threadId: tab.piSessionId,
     projectId: tab.projectId ?? "",
     cwd: tab.cwd ?? "",
     paneId,
-    tabId: tab.id,
-    piSessionId: tab.piSessionId,
     modelId: tab.modelId ?? state.selectedModel,
     title: cleanSessionTitle(tab.title) || (paneId ? "Current session" : "Background session"),
     status: tab.status,
     focused,
     startedAt: tab.startedAt,
-    updatedAt: tab.startedAt || new Date().toISOString(),
+    updatedAt: tab.startedAt ?? "",
     skills: selection.skills.length > 0 ? selection.skills : undefined,
     usedSkills: usedSkills.length > 0 ? usedSkills : undefined,
   };
 }
 
-function computeActiveSessionBroadcast(
+function openSessionsFromWorkspace(
   state: WorkspaceState,
   selectionFor: (id: SessionId) => ToolSelection,
-): ActiveAgentSessionSnapshot[] | null {
+): OpenAgentSession[] | null {
   if (!state.hydrated) return null;
-  const out: ActiveAgentSessionSnapshot[] = [];
+  const out: OpenAgentSession[] = [];
   const inPane = new Set<SessionId>();
   for (const [paneId, pane] of state.panesById.entries()) {
-    if (pane.kind === "terminal") {
-      continue;
-    }
     const sessionId = paneSessionId(pane);
     const tab = sessionId ? state.sessions.get(sessionId) : undefined;
     if (!tab) continue;
     inPane.add(tab.id);
     if (!(Boolean(tab.piSessionId) || tab.messages.length > 0) || tab.status === "loading")
       continue;
-    out.push(
-      activeSessionSnapshot(state, tab, selectionFor, paneId, paneId === state.focusedPaneId),
-    );
+    out.push(openSessionSnapshot(state, tab, selectionFor, paneId, paneId === state.focusedPaneId));
   }
-  // Sessions still working after the user navigated away keep no pane, but
-  // pruneSessions keeps them alive in the store. Surface them so a turn started
-  // in another chat stays visible (and re-openable) in the sidebar instead of
-  // running invisibly in the background.
   for (const tab of state.sessions.values()) {
     if (inPane.has(tab.id)) continue;
     if (tab.status !== "running" && tab.status !== "starting") continue;
-    out.push(activeSessionSnapshot(state, tab, selectionFor, "", false));
+    out.push(openSessionSnapshot(state, tab, selectionFor, "", false));
   }
   return out;
 }
@@ -281,10 +229,6 @@ function usedSkillsForSession(tab: Pick<Session, "messages" | "usedSkills">): Co
   return [...byId.values()];
 }
 
-function activeSessionBroadcastKey(sessions: ActiveAgentSessionSnapshot[] | null): string {
-  return JSON.stringify(sessions ?? null);
-}
-
 function storedSessionsKey(state: WorkspaceState): string {
   const entries: Array<{ id: string; title: string; cwd?: string }> = [];
   for (const tab of state.sessions.values()) {
@@ -295,27 +239,11 @@ function storedSessionsKey(state: WorkspaceState): string {
   return JSON.stringify(entries);
 }
 
-// Cheap O(sessions) fingerprint of everything the active-session broadcast
-// snapshot actually depends on: hydration, the selected-model fallback, focus,
-// pane membership, and each session's identity/status/skill scalars. It
-// deliberately reads `messages.length` (not message bodies) and `usedSkills`
-// length — a streaming text delta grows the last message in place without
-// changing any of these, so the signature is stable across the entire token
-// stream of a turn. Tool selection (plugins/skills) is intentionally excluded:
-// it does not flow through a workspace dispatch, so gating on it would never
-// help and only the next session-field change re-broadcasts it (unchanged from
-// the prior every-dispatch behavior).
-export function activeBroadcastSignature(state: WorkspaceState): string {
-  if (!state.hydrated) return " unhydrated";
+function openSessionsSignature(state: WorkspaceState): string {
+  if (!state.hydrated) return "\u0000unhydrated";
   const parts: string[] = [`m:${state.selectedModel ?? ""}`, `f:${state.focusedPaneId ?? ""}`];
   for (const [paneId, pane] of state.panesById.entries())
-    parts.push(
-      `P:${paneId}>${
-        pane.kind === "terminal"
-          ? `${pane.mountKey}|${pane.title}|${pane.projectId ?? ""}|${pane.cwd ?? ""}`
-          : pane.sessionId
-      }`,
-    );
+    parts.push(`P:${paneId}>${pane.sessionId}`);
   for (const tab of state.sessions.values()) {
     parts.push(
       `S:${tab.id}|${tab.status}|${tab.piSessionId ?? ""}|` +
@@ -326,22 +254,19 @@ export function activeBroadcastSignature(state: WorkspaceState): string {
   return parts.join("\n");
 }
 
-function broadcastActiveSessions(
+function publishWorkspaceSessions(
   prevState: WorkspaceState,
   nextState: WorkspaceState,
   deps: WorkspaceEffectDeps,
 ): void {
-  // Hot path: a coalesced text delta dispatches patchSession on every animation
-  // frame. The broadcast snapshot can't change unless a broadcast-relevant
-  // scalar changed, so short-circuit on the cheap signature BEFORE the
-  // O(sessions x messages) double walk + JSON.stringify that follows.
-  if (activeBroadcastSignature(prevState) === activeBroadcastSignature(nextState)) return;
+  if (openSessionsSignature(prevState) === openSessionsSignature(nextState)) return;
   const selectionFor = deps.selectionFor ?? (() => EMPTY_SELECTION);
-  const previous = computeActiveSessionBroadcast(prevState, selectionFor);
-  const next = computeActiveSessionBroadcast(nextState, selectionFor);
-  if (!next || activeSessionBroadcastKey(previous) === activeSessionBroadcastKey(next)) return;
-  writeActiveSessions(deps.storage, next);
-  dispatchCustomEvent(deps, ACTIVE_AGENT_SESSIONS_EVENT, { sessions: next });
+  const next = openSessionsFromWorkspace(nextState, selectionFor);
+  if (!next) return;
+  publishOpenSessions(next);
+  for (const session of next) {
+    if (session.focused) markSessionActivitySeen(session.id, session.threadId);
+  }
 }
 
 function queueLocatedReplay(
@@ -371,17 +296,10 @@ function queueReplayEffects(
       }
       return;
     case "urlNavRequested":
-      if (action.sessionId) queueLocatedReplay(action.sessionId, nextState, deps);
-      return;
-    case "hydrateActiveSessions": {
-      const queued = new Set<string>();
-      for (const snapshot of action.snapshots) {
-        if (!snapshot.piSessionId || queued.has(snapshot.piSessionId)) continue;
-        queued.add(snapshot.piSessionId);
-        queueLocatedReplay(snapshot.piSessionId, nextState, deps);
+      if (action.sessionId && !findPaneByPiSessionId(prevState, action.sessionId)) {
+        queueLocatedReplay(action.sessionId, nextState, deps);
       }
       return;
-    }
     default:
       return;
   }
@@ -393,6 +311,9 @@ function persistActionEffects(
   nextState: WorkspaceState,
   deps: WorkspaceEffectDeps,
 ): void {
+  if (prevState.sessionDrafts !== nextState.sessionDrafts) {
+    writeSessionDrafts(deps.storage, nextState.sessionDrafts);
+  }
   if (PANE_STATE_ACTIONS.has(action.type)) {
     writePaneState(deps.storage, nextState, deps.selectionFor);
     return;
@@ -403,8 +324,6 @@ function persistActionEffects(
   ) {
     writePaneState(deps.storage, nextState, deps.selectionFor);
   }
-  // Browser/computer tool state persistence now lives in
-  // features/agent/tools/persistence.ts and is driven by ToolsProvider directly.
 }
 
 function paneMetadataKey(
@@ -415,15 +334,12 @@ function paneMetadataKey(
   for (const [paneId, pane] of state.panesById.entries()) {
     const sessionId = paneSessionId(pane);
     const session = sessionId ? state.sessions.get(sessionId) : undefined;
-    panes[paneId] =
-      pane.kind === "terminal"
-        ? { terminal: pane.mountKey }
-        : {
-            sessionId: pane.sessionId,
-            tab: session
-              ? sessionMetaForPersistence(session, selectionFor?.(pane.sessionId) ?? undefined)
-              : null,
-          };
+    panes[paneId] = {
+      sessionId: pane.sessionId,
+      tab: session
+        ? sessionMetaForPersistence(session, selectionFor?.(pane.sessionId) ?? undefined)
+        : null,
+    };
   }
   return JSON.stringify({
     layout: state.layout,
@@ -436,8 +352,6 @@ function isSettledStatus(status: string): boolean {
   return status === "idle" || status === "done";
 }
 
-// Cheap content fingerprint — enough to tell "this session's transcript moved"
-// without serializing every message on every dispatch.
 function transcriptSignature(session: Session): string {
   const last = session.messages[session.messages.length - 1];
   return [
@@ -450,10 +364,6 @@ function transcriptSignature(session: Session): string {
   ].join("|");
 }
 
-// Persist the crash-recovery transcript fallback once a session settles with
-// new content. Gated on settle + signature change so it writes about once per
-// completed turn, never per streamed token. The canonical pi JSONL stays the
-// source of truth; this only backstops a failed/empty replay on restore.
 function persistSettledTranscripts(
   prevState: WorkspaceState,
   nextState: WorkspaceState,
@@ -473,77 +383,39 @@ function persistSettledTranscripts(
   }
 }
 
-function closeRemovedTerminalPanes(
-  action: WorkspaceAction,
+function persistTurnStartTranscripts(
   prevState: WorkspaceState,
   nextState: WorkspaceState,
   deps: WorkspaceEffectDeps,
 ): void {
-  if (action.type !== "closePane") return;
-  if (!deps.closeTerminalOwner || prevState.panesById === nextState.panesById) return;
-  const surviving = new Set<string>();
-  for (const pane of nextState.panesById.values()) {
-    if (pane.kind === "terminal") surviving.add(pane.mountKey);
-  }
-  for (const pane of prevState.panesById.values()) {
-    if (pane.kind === "terminal" && !surviving.has(pane.mountKey)) {
-      deps.closeTerminalOwner(pane.mountKey);
-    }
+  for (const [id, session] of nextState.sessions) {
+    if (!session.piSessionId || session.messages.length === 0) continue;
+    if (session.status !== "running" && session.status !== "starting") continue;
+    const before = prevState.sessions.get(id);
+    if (!before || before.status === session.status) continue;
+    writeTranscriptSnapshot(
+      session.piSessionId,
+      session.messages,
+      cleanSessionTitle(session.title),
+      deps.storage,
+    );
   }
 }
 
-function terminalOwnerFromPane(pane: TerminalPaneState): TerminalOwner {
-  const sessionKey = pane.ownerSessionId ? `session:${pane.ownerSessionId}` : "";
-  const piKey = pane.ownerPiSessionId ? `pi:${pane.ownerPiSessionId}` : "";
-  const projectKey = pane.projectId ? `project:${pane.projectId}` : "";
-  return {
-    mountKey: pane.mountKey,
-    matchKeys: uniqueTerminalKeys([pane.mountKey, sessionKey, piKey, projectKey]),
-    cwd: pane.cwd,
-    title: pane.title,
-    kind: pane.ownerSessionId || pane.ownerPiSessionId ? "session" : "project",
-    sessionId: pane.ownerSessionId,
-    piSessionId: pane.ownerPiSessionId,
-    projectId: pane.projectId,
-  };
-}
-
-function terminalOwnerKey(state: WorkspaceState): string {
-  const keys: string[] = [];
-  for (const pane of state.panesById.values()) {
-    if (pane.kind === "terminal") keys.push(pane.mountKey);
-  }
-  return keys.sort().join("\n");
-}
-
-function rememberCurrentTerminalPanes(
+function persistExitedTranscripts(
   prevState: WorkspaceState,
   nextState: WorkspaceState,
   deps: WorkspaceEffectDeps,
 ): void {
-  if (!deps.rememberTerminalOwner) return;
-  if (terminalOwnerKey(prevState) === terminalOwnerKey(nextState)) return;
-  for (const pane of nextState.panesById.values()) {
-    if (pane.kind === "terminal") deps.rememberTerminalOwner(terminalOwnerFromPane(pane));
-  }
-}
-
-function rememberDetachedTerminalPanes(
-  action: WorkspaceAction,
-  prevState: WorkspaceState,
-  nextState: WorkspaceState,
-  deps: WorkspaceEffectDeps,
-): void {
-  if (action.type !== "urlNavRequested" || action.replaceWorkspace !== true) return;
-  if (!deps.rememberTerminalOwner || prevState.panesById === nextState.panesById) return;
-  const surviving = new Set<string>();
-  for (const pane of nextState.panesById.values()) {
-    if (pane.kind === "terminal") surviving.add(pane.mountKey);
-  }
-  for (const pane of prevState.panesById.values()) {
-    if (pane.kind === "terminal" && !surviving.has(pane.mountKey)) {
-      deps.rememberTerminalOwner(terminalOwnerFromPane(pane));
-    }
+  for (const [id, session] of prevState.sessions) {
+    if (!session.piSessionId || session.messages.length === 0) continue;
+    if (nextState.sessions.has(id)) continue;
+    writeTranscriptSnapshot(
+      session.piSessionId,
+      session.messages,
+      cleanSessionTitle(session.title),
+      deps.storage,
+    );
   }
 }
 
@@ -555,17 +427,16 @@ export function runWorkspaceEffect(
 ): void {
   persistActionEffects(action, prevState, nextState, deps);
   queueReplayEffects(action, prevState, nextState, deps);
-  rememberCurrentTerminalPanes(prevState, nextState, deps);
-  rememberDetachedTerminalPanes(action, prevState, nextState, deps);
-  closeRemovedTerminalPanes(action, prevState, nextState, deps);
 
   if (action.type === "hydrate") {
     runInitialApiEffects(nextState, deps);
   }
 
-  broadcastActiveSessions(prevState, nextState, deps);
+  publishWorkspaceSessions(prevState, nextState, deps);
   if (SESSIONS_CHANGED_ACTIONS.has(action.type)) {
     persistSettledTranscripts(prevState, nextState, deps);
+    persistTurnStartTranscripts(prevState, nextState, deps);
+    persistExitedTranscripts(prevState, nextState, deps);
   }
   if (
     SESSIONS_CHANGED_ACTIONS.has(action.type) &&

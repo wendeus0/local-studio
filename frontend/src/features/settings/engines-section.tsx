@@ -84,11 +84,13 @@ export function EnginesSection({ runtime }: { runtime?: SystemRuntimeInfo | null
   const hasRows = hasHydratedEngineRows(engineRows);
 
   return (
-    <div className="space-y-8">
+    <div>
       <SettingsGroup
-        title="Inference engines"
-        description="Model-serving runtimes installed on the controller host."
+        title="Runtime engines"
+        description="Install, update, and inspect the model-serving runtimes on this controller."
         actions={<HydrationStatus hasRows={hasRows} />}
+        collapsible
+        defaultOpen={false}
       >
         {lostJobNotice ? (
           <SettingsNotice tone="warning" className="m-3">
@@ -101,12 +103,6 @@ export function EnginesSection({ runtime }: { runtime?: SystemRuntimeInfo | null
           onJobCreated={refreshRuntimeJobs}
           view={engineRows}
         />
-      </SettingsGroup>
-
-      <SettingsGroup
-        title="Hardware monitor"
-        description="GPU telemetry and lease state reported by the controller."
-      >
         <GpuMonitoringRow gpuMon={gpuMon} />
         <GpuLeaseRow holder={lease?.holder} />
       </SettingsGroup>
@@ -318,8 +314,6 @@ function EngineStatus({ installed, active }: { installed: boolean; active?: bool
 }
 
 function upgradeHandler(id: string) {
-  if (id === "vllm") return () => api.upgradeVllmRuntime();
-  if (id === "sglang") return () => api.upgradeSglangRuntime();
-  if (id === "llamacpp") return () => api.upgradeLlamacppRuntime();
+  if (id === "vllm" || id === "sglang" || id === "llamacpp") return () => api.upgradeRuntime(id);
   return undefined;
 }

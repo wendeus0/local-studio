@@ -1,13 +1,27 @@
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
+import c from "highlight.js/lib/languages/c";
+import cpp from "highlight.js/lib/languages/cpp";
+import csharp from "highlight.js/lib/languages/csharp";
+import css from "highlight.js/lib/languages/css";
 import diff from "highlight.js/lib/languages/diff";
+import dockerfile from "highlight.js/lib/languages/dockerfile";
 import go from "highlight.js/lib/languages/go";
+import graphql from "highlight.js/lib/languages/graphql";
+import ini from "highlight.js/lib/languages/ini";
+import java from "highlight.js/lib/languages/java";
 import javascript from "highlight.js/lib/languages/javascript";
 import json from "highlight.js/lib/languages/json";
+import kotlin from "highlight.js/lib/languages/kotlin";
+import lua from "highlight.js/lib/languages/lua";
+import makefile from "highlight.js/lib/languages/makefile";
 import markdown from "highlight.js/lib/languages/markdown";
 import python from "highlight.js/lib/languages/python";
+import ruby from "highlight.js/lib/languages/ruby";
 import rust from "highlight.js/lib/languages/rust";
+import scss from "highlight.js/lib/languages/scss";
 import sql from "highlight.js/lib/languages/sql";
+import swift from "highlight.js/lib/languages/swift";
 import typescript from "highlight.js/lib/languages/typescript";
 import yaml from "highlight.js/lib/languages/yaml";
 import xml from "highlight.js/lib/languages/xml";
@@ -31,6 +45,30 @@ export function highlightFenced(language: string | null, code: string): string {
   cache.set(key, highlighted);
   trimCache();
   return highlighted;
+}
+
+export function highlightLines(language: string | null, lines: readonly string[]): string[] {
+  if (lines.length === 0) return [];
+  const rendered = [""];
+  const openSpans: string[] = [];
+  for (const token of highlightFenced(language, lines.join("\n")).split(
+    /(<span[^>]*>|<\/span>|\n)/,
+  )) {
+    const line = rendered.length - 1;
+    if (token === "\n") {
+      rendered[line] += "</span>".repeat(openSpans.length);
+      rendered.push(openSpans.join(""));
+    } else if (token.startsWith("<span")) {
+      openSpans.push(token);
+      rendered[line] += token;
+    } else if (token === "</span>") {
+      openSpans.pop();
+      rendered[line] += token;
+    } else {
+      rendered[line] += token;
+    }
+  }
+  return rendered;
 }
 
 export function escapeHighlightHtml(code: string): string {
@@ -68,6 +106,25 @@ function ensureLanguagesRegistered(): void {
   hljs.registerLanguage("rust", rust);
   hljs.registerAliases(["rs"], { languageName: "rust" });
   hljs.registerLanguage("go", go);
+  hljs.registerLanguage("c", c);
+  hljs.registerLanguage("cpp", cpp);
+  hljs.registerLanguage("csharp", csharp);
+  hljs.registerAliases(["cs"], { languageName: "csharp" });
+  hljs.registerLanguage("css", css);
+  hljs.registerLanguage("scss", scss);
+  hljs.registerLanguage("java", java);
+  hljs.registerLanguage("kotlin", kotlin);
+  hljs.registerAliases(["kt", "kts"], { languageName: "kotlin" });
+  hljs.registerLanguage("swift", swift);
+  hljs.registerLanguage("ruby", ruby);
+  hljs.registerAliases(["rb"], { languageName: "ruby" });
+  hljs.registerLanguage("lua", lua);
+  hljs.registerLanguage("graphql", graphql);
+  hljs.registerAliases(["gql"], { languageName: "graphql" });
+  hljs.registerLanguage("ini", ini);
+  hljs.registerAliases(["toml"], { languageName: "ini" });
+  hljs.registerLanguage("dockerfile", dockerfile);
+  hljs.registerLanguage("makefile", makefile);
   hljs.registerLanguage("bash", bash);
   hljs.registerAliases(["sh", "shell", "zsh"], { languageName: "bash" });
   hljs.registerLanguage("json", json);

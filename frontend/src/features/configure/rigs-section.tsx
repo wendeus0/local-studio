@@ -96,6 +96,7 @@ function RigCard({
   const workers = nodes.filter((node) => node !== head);
   const totalGb = nodes.reduce((sum, node) => sum + nodeAcceleratorGb(node), 0);
   const containsLocal = rig.nodes.some((node) => node.id === state.localNodeId);
+  const displayName = rig.name === "My Rig" ? "Your machines" : rig.name;
 
   const renderNode = (node: RigNode) => (
     <RigNodeCard
@@ -109,15 +110,15 @@ function RigCard({
   );
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-(--ui-border) bg-(--ui-surface-2)/30">
-      <header className="space-y-4 border-b border-(--ui-separator)/60 px-5 pb-4 pt-5">
+    <section className="overflow-hidden rounded-xl border border-(--ui-border) bg-(--ui-surface)">
+      <header className="space-y-4 border-b border-(--ui-separator) px-5 py-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
             <InlineRename
-              value={rig.name}
-              label={`rig ${rig.name}`}
+              value={displayName}
+              label={`machine group ${displayName}`}
               onRename={(name) => state.renameRig(rig.id, name)}
-              textClassName="text-[length:var(--fs-3xl)] font-semibold tracking-[-0.015em] text-(--ui-fg)"
+              textClassName="text-[length:var(--fs-xl)] font-medium tracking-[-0.01em] text-(--ui-fg)"
             />
             {rig.description ? (
               <p className="mt-0.5 text-[length:var(--fs-sm)] text-(--ui-muted)">
@@ -127,34 +128,26 @@ function RigCard({
           </div>
           <div className="flex items-start gap-6">
             <RigStat
-              label={rig.nodes.length === 1 ? "device" : "devices"}
+              label={rig.nodes.length === 1 ? "machine" : "machines"}
               value={String(rig.nodes.length)}
             />
-            {totalGb > 0 ? <RigStat label="accel memory" value={`${totalGb} GB`} /> : null}
+            {totalGb > 0 ? <RigStat label="GPU memory" value={`${totalGb} GB`} /> : null}
           </div>
         </div>
         <PooledMemoryBar nodes={nodes} totalGb={totalGb} />
       </header>
 
-      <div className="space-y-3 px-5 py-4">
+      <div className="divide-y divide-(--ui-separator)">
         {head ? renderNode(head) : null}
         {head && workers.length > 0 ? (
-          <div className="flex items-center gap-3 px-1 text-[length:var(--fs-xs)] text-(--ui-muted)/80">
+          <div className="flex items-center gap-3 px-5 py-2 text-[length:var(--fs-xs)] text-(--ui-muted)/80">
             <span className="ml-6 h-3 w-px bg-(--ui-separator)" />
             {workers.length === 1 ? "1 worker joins" : `${workers.length} workers join`} the head
             over the local network
           </div>
         ) : null}
         {workers.length > 0 ? (
-          <div
-            className={cx(
-              "grid grid-cols-1 gap-3",
-              workers.length > 1 ? "2xl:grid-cols-2" : "",
-              head ? "border-l border-(--ui-separator)/50 pl-4 ml-6" : "",
-            )}
-          >
-            {workers.map(renderNode)}
-          </div>
+          <div className="divide-y divide-(--ui-separator)">{workers.map(renderNode)}</div>
         ) : null}
         {rig.nodes.length === 0 ? (
           <EmptySafeNotice>
@@ -164,18 +157,18 @@ function RigCard({
         ) : null}
       </div>
 
-      <footer className="flex items-center justify-between border-t border-(--ui-separator)/60 px-5 py-3">
+      <footer className="flex items-center justify-between border-t border-(--ui-separator) px-5 py-3">
         <Button
           variant="secondary"
           size="sm"
           icon={<Plus className="h-3.5 w-3.5" />}
           onClick={onAddNode}
         >
-          Add device
+          Add another machine
         </Button>
         {containsLocal ? (
           <span className="text-[length:var(--fs-xs)] text-(--ui-muted)/70">
-            Includes this machine — detected hardware stays live
+            Hardware for this machine updates automatically
           </span>
         ) : (
           <Button variant="danger" size="sm" onClick={onDeleteRig}>
@@ -239,7 +232,7 @@ export function RigsSection({ state }: { state: ConfigureState }) {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {state.rigs.map((rig) => (
         <RigCard
           key={rig.id}
@@ -261,12 +254,12 @@ export function RigsSection({ state }: { state: ConfigureState }) {
           void state.createRig("New Rig").finally(() => setCreatingRig(false));
         }}
       >
-        New rig
+        New machine group
       </Button>
 
       {nodeTarget ? (
         <NodeFormModal
-          title={nodeTarget.node ? `Edit ${nodeTarget.node.name}` : "Add device"}
+          title={nodeTarget.node ? `Edit ${nodeTarget.node.name}` : "Add machine"}
           initial={nodeTarget.node ? nodeToForm(nodeTarget.node) : undefined}
           detected={nodeTarget.node?.source === "detected"}
           onClose={() => setNodeTarget(null)}

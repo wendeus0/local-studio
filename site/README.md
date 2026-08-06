@@ -1,30 +1,11 @@
-# Local Studio — product site
+# Product site
 
-Pure static site: `index.html`, `site.css`, and a tiny `site.js` for OS
-detection. No build step, no external requests (no CDN fonts, scripts, or
-remote images).
+The landing page is static HTML, CSS, and JavaScript with no build step or
+external runtime dependencies.
 
-## Serve locally
+Run `python3 -m http.server --directory site 8000` for a local preview.
 
-```sh
-cd site
-python3 -m http.server 8000
-# open http://localhost:8000
-```
-
-## Deploy
-
-Copy the three files (plus this README if you like) to any static host —
-GitHub Pages, Cloudflare Pages, Netlify, an nginx root. No configuration
-needed.
-
-## Download links
-
-All download buttons currently point at
-`https://github.com/sybil-solutions/local-studio/releases/latest`.
-When installer assets are published, switch to direct links using the
-canonical pattern:
-
-```
-https://github.com/sybil-solutions/local-studio/releases/latest/download/<asset>
-```
+Pushes to `main` deploy `site/` to GitHub Pages. The macOS button is pinned to
+the signed `Local-Studio-arm64.dmg` asset on the v2.0.0 release so a later
+release without desktop assets cannot break the public download. Windows and
+Linux link to the releases page until installers ship.

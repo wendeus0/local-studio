@@ -3,6 +3,7 @@
 import type { DashboardLayoutProps } from "../layout/dashboard-types";
 import { StatusSection } from "./status-section";
 import { GpuSection } from "./gpu-section";
+import { useApiUrlCensored } from "@/ui/api-url-censor";
 import {
   activateController,
   useControllerMatrixStore,
@@ -50,11 +51,9 @@ function ControllerMatrix() {
   const { rows, activeUrl, visible } = useControllerMatrixStore();
   if (!visible) return null;
   return (
-    <section className="mb-3 border-b border-(--border)/35 pb-3">
+    <section className="mb-3 border-b border-(--separator) pb-3">
       <div className="mb-2 flex items-center justify-between gap-3">
-        <div className="font-mono text-[length:var(--fs-2xs)] font-medium uppercase tracking-[0.18em] text-(--dim)/75">
-          controllers live
-        </div>
+        <div className="text-[length:var(--fs-sm)] font-medium text-(--hl2)">controllers live</div>
         <div className="text-[length:var(--fs-xs)] text-(--dim)/70">
           {rows.filter((row) => row.online).length}/{rows.length} online
         </div>
@@ -82,6 +81,7 @@ function ControllerTab({
   active: boolean;
   onActivate: () => void;
 }) {
+  const censorUrls = useApiUrlCensored();
   const fallback = controller.primary ? "primary" : `controller ${controller.index + 1}`;
   const label = controller.name?.trim() || fallback;
   const state = controller.authRequired
@@ -95,7 +95,7 @@ function ControllerTab({
     <button
       type="button"
       onClick={onActivate}
-      title={controller.url}
+      title={censorUrls ? "Controller URL censored" : controller.url}
       className={`group inline-flex h-7 min-w-0 max-w-full shrink-0 items-center gap-2 whitespace-nowrap rounded-md border px-2 text-left text-[length:var(--fs-sm)] transition ${
         active
           ? "border-(--accent)/60 bg-(--accent)/10 text-(--fg)"
@@ -107,9 +107,7 @@ function ControllerTab({
       {controller.modelName ? (
         <span className="max-w-[14rem] truncate text-(--dim)">{controller.modelName}</span>
       ) : null}
-      <span className="font-mono text-[length:var(--fs-2xs)] uppercase tracking-wide text-(--dim)">
-        {state}
-      </span>
+      <span className="text-[length:var(--fs-sm)] text-(--hl2)">{state}</span>
     </button>
   );
 }
@@ -118,11 +116,9 @@ function ActivityStrip({ logs }: DashboardLayoutProps) {
   const tail = logs.length > 0 ? logs.slice(-120) : [];
 
   return (
-    <section className="border-t border-(--border)/40 px-2 pt-4 pb-5">
+    <section className="border-t border-(--separator) px-2 pt-4 pb-5">
       <div className="mb-2 flex items-center justify-between gap-3">
-        <div className="font-mono text-[length:var(--fs-2xs)] font-medium uppercase tracking-[0.18em] text-(--dim)/75">
-          Controller logs
-        </div>
+        <div className="text-[length:var(--fs-sm)] font-medium text-(--hl2)">Controller logs</div>
         <div className="text-[length:var(--fs-xs)] text-(--dim)/70">{tail.length} lines</div>
       </div>
       <div className="max-h-[34rem] min-h-[18rem] overflow-y-auto border border-(--border)/45 bg-(--surface)/40 p-3 font-mono text-[length:var(--fs-xs)] leading-5 text-(--dim)/80">

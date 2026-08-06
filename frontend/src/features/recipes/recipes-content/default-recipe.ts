@@ -5,6 +5,7 @@ export const DEFAULT_RECIPE: RecipeEditor = {
   name: "",
   model_path: "",
   backend: "vllm",
+  runtime: { kind: "managed_venv", ref: "vllm", label: "Managed vLLM" },
   tp: 1,
   pp: 1,
   tensor_parallel_size: 1,
@@ -16,5 +17,6 @@ export const DEFAULT_RECIPE: RecipeEditor = {
   max_num_seqs: 256,
   kv_cache_dtype: "auto",
   trust_remote_code: true,
+  vision: null,
   extra_args: {},
 };

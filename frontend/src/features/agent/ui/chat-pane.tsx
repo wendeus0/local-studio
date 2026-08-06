@@ -1,6 +1,7 @@
 "use client";
 import dynamic from "next/dynamic";
 import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useMountSubscription } from "@/hooks/use-mount-subscription";
 import { AgentChatPaneHeader } from "@/features/agent/ui/agent-chat-pane-header";
 import { AgentComposerFrame } from "@/features/agent/ui/agent-composer-frame";
 import { type FileMentionRow } from "@/features/agent/ui/agent-composer-context";
@@ -19,30 +20,37 @@ import {
   useChatPaneDerivedState,
   useChatPaneMentionEffects,
   useChatPaneRuntimeHandle,
-  useChatPaneStickToBottomEffect,
 } from "@/features/agent/ui/chat-pane-hooks";
 import { useChatPaneSessionTitle } from "@/features/agent/ui/chat-pane-session-title";
 import { useChatPaneSendFlow } from "@/features/agent/ui/chat-pane-send-flow";
 import { ChatPaneHandle, SessionTab } from "@/features/agent/messages";
 import { useSessionEngine } from "@/features/agent/runtime/engine";
+import type { UpdateSession } from "@/features/agent/runtime/types";
 import { useTools } from "@/features/agent/tools/context";
 import type { GitSummary } from "@/features/agent/projects/types";
 import type { BrowserBackend } from "@/features/agent/tools/types";
-import { CloseIcon, ReloadIcon } from "@/ui/icons";
 import {
   exportFilenameFromTitle,
   sessionToMarkdown,
 } from "@/features/agent/messages/export-markdown";
+import {
+  OPEN_TERMINAL_EVENT,
+  type OpenTerminalEventDetail,
+  type TerminalOwner,
+} from "@/features/agent/terminal-owners";
+import {
+  rememberPersistentTerminalOwner,
+  selectPersistentTerminalOwner,
+  usePersistentTerminalOwners,
+} from "@/features/agent/ui/use-persistent-terminal-owners";
+import { PersistentTerminals } from "@/features/agent/ui/persistent-terminals";
+import { cx } from "@/ui/utils";
 export type { ChatPaneHandle, SessionTab };
 
 const Timeline = dynamic(
   () => import("@/features/agent/ui/timeline/timeline").then((mod) => mod.Timeline),
   { ssr: false, loading: () => <TimelineFallback /> },
 );
-
-const FINALIZATION_RETRY_ERROR_RE =
-  /Model did not produce a valid final response\.?\s+Retrying finalization/i;
-const BENIGN_TRANSPORT_ERROR_RE = /^(?:terminated|abort(?:ed)?|network error|load failed)$/i;
 
 function downloadTextFile(filename: string, content: string): void {
   if (typeof document === "undefined") return;
@@ -55,18 +63,6 @@ function downloadTextFile(filename: string, content: string): void {
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
-}
-
-function visibleSessionError(error?: string): string {
-  const value = error?.trim() ?? "";
-  return FINALIZATION_RETRY_ERROR_RE.test(value) || BENIGN_TRANSPORT_ERROR_RE.test(value)
-    ? ""
-    : value;
-}
-
-function canRetrySession(tab: SessionTab | null, hasModel: boolean, running: boolean): boolean {
-  if (!tab || !hasModel || running) return false;
-  return tab.messages.some((message) => message.role === "user") || Boolean(tab.input.trim());
 }
 
 function EmptyPromptTimeline() {
@@ -86,6 +82,61 @@ function EmptyPromptTimeline() {
 
 function TimelineFallback() {
   return <div className="flex min-h-0 flex-1 bg-(--agent-bg)" />;
+}
+
+function chatPaneClassName(composerOnly: boolean): string {
+  return cx(
+    "relative flex min-h-0 min-w-0 flex-1 flex-col",
+    composerOnly
+      ? "bg-transparent"
+      : "bg-(--agent-bg) shadow-[inset_1px_0_rgba(255,255,255,0.015)]",
+  );
+}
+
+function ChatTranscript({
+  composerOnly,
+  terminalView,
+  showEmptyPrompt,
+  activeTab,
+  stickToBottom,
+  setStickToBottom,
+  running,
+  onForkSession,
+  loadEarlierHistory,
+}: {
+  composerOnly: boolean;
+  terminalView: boolean;
+  showEmptyPrompt: boolean;
+  activeTab: SessionTab | undefined;
+  stickToBottom: boolean;
+  setStickToBottom: (value: boolean) => void;
+  running: boolean;
+  onForkSession?: () => void;
+  loadEarlierHistory: () => Promise<void>;
+}) {
+  const viewKey = activeTab?.piSessionId ?? activeTab?.id ?? null;
+  const viewAlias = activeTab?.piSessionId ? activeTab.id : null;
+  if (composerOnly) return null;
+  return (
+    <div className={terminalView ? "hidden" : "flex min-h-0 min-w-0 flex-1"}>
+      {showEmptyPrompt ? (
+        <EmptyPromptTimeline />
+      ) : (
+        <Timeline
+          key={activeTab?.id ?? "empty"}
+          stickToBottom={stickToBottom}
+          onStickToBottomChange={setStickToBottom}
+          messages={activeTab?.messages ?? []}
+          running={running}
+          viewKey={viewKey}
+          viewAlias={viewAlias}
+          onForkSession={onForkSession}
+          hasEarlier={activeTab?.historyCursor != null}
+          onLoadEarlier={loadEarlierHistory}
+        />
+      )}
+    </div>
+  );
 }
 
 type Props = {
@@ -112,15 +163,17 @@ type Props = {
   onPiSessionIdChange?: (sessionId: string) => void;
   tabs: SessionTab[];
   activeTabId: string;
-  onTabsChange: (tabs: SessionTab[] | ((tabs: SessionTab[]) => SessionTab[])) => void;
+  onUpdateSession: UpdateSession;
   onRenameSession: (tabId: string, title: string) => void;
   onClose?: () => void;
   onForkSession?: () => void;
   onOpenTerminal?: () => void;
+  terminalOwner?: TerminalOwner | null;
   rightPanelOpen: boolean;
   onToggleRightPanel: () => void;
   onRegisterHandle?: (handle: ChatPaneHandle | null) => void;
   showHeader?: boolean;
+  composerOnly?: boolean;
 };
 export function ChatPane({
   paneId,
@@ -146,15 +199,17 @@ export function ChatPane({
   onPiSessionIdChange,
   tabs,
   activeTabId,
-  onTabsChange,
+  onUpdateSession,
   onRenameSession,
   onClose,
   onForkSession,
   onOpenTerminal,
+  terminalOwner = null,
   rightPanelOpen,
   onToggleRightPanel,
   onRegisterHandle,
   showHeader = true,
+  composerOnly = false,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -174,14 +229,30 @@ export function ChatPane({
     showEmptyPrompt,
     visibleQueueItems,
   } = useChatPaneDerivedState({ activeTabId, contextWindow, tabs });
-  const updateTab = useCallback(
-    (tabId: string, patch: (tab: SessionTab) => SessionTab) => {
-      onTabsChange((currentTabs) =>
-        currentTabs.map((tab) => (tab.id === tabId ? patch(tab) : tab)),
-      );
-    },
-    [onTabsChange],
+  const [terminalView, setTerminalView] = useState(false);
+  const terminalSnapshot = usePersistentTerminalOwners(
+    terminalView,
+    terminalView ? terminalOwner : null,
   );
+  const toggleTerminalView = useCallback(() => {
+    setTerminalView((open) => {
+      const next = !open;
+      if (next && terminalOwner) rememberPersistentTerminalOwner(terminalOwner, { select: true });
+      return next;
+    });
+  }, [terminalOwner]);
+  useMountSubscription(() => {
+    if (!isFocused) return;
+    const onOpenTerminalEvent = (event: Event) => {
+      const detail = (event as CustomEvent<OpenTerminalEventDetail>).detail;
+      if (!detail?.mountKey) return;
+      selectPersistentTerminalOwner(detail.mountKey);
+      setTerminalView(true);
+    };
+    window.addEventListener(OPEN_TERMINAL_EVENT, onOpenTerminalEvent);
+    return () => window.removeEventListener(OPEN_TERMINAL_EVENT, onOpenTerminalEvent);
+  }, [isFocused]);
+  const updateTab = onUpdateSession;
   const {
     attachments,
     setAttachments,
@@ -198,10 +269,6 @@ export function ChatPane({
     running: Boolean(running),
     updateTab,
     fileInputRef,
-  });
-  useChatPaneStickToBottomEffect({
-    activeTabId: activeTab?.id,
-    setStickToBottom,
   });
   useChatPaneContextAttachEffect({
     contextAttachRequest: tools.contextAttachRequest,
@@ -271,7 +338,7 @@ export function ChatPane({
     updateSession: updateTab,
     selectionFor: tools.selectionFor,
   });
-  const { sendMessage, queueMessage, removeQueued, editQueued, steerQueued, abortTurn, retryLast } =
+  const { sendMessage, queueMessage, removeQueued, editQueued, steerQueued, abortTurn } =
     useChatPaneSendFlow({
       activeTab,
       attachments,
@@ -317,15 +384,10 @@ export function ChatPane({
     activeTabId,
     engine,
     modelId,
+    isFocused,
     onRegisterHandle,
     running: Boolean(running),
   });
-  const visibleError = visibleSessionError(activeTab?.error);
-  const canRetry = canRetrySession(activeTab, Boolean(modelId), Boolean(running));
-  const dismissVisibleError = useCallback(() => {
-    if (!activeTab) return;
-    updateTab(activeTab.id, (tab) => ({ ...tab, error: "" }));
-  }, [activeTab, updateTab]);
   const exportSession = useCallback(() => {
     if (!activeTab) return;
     const markdown = sessionToMarkdown(activeTab.messages, displayedSessionTitle);
@@ -342,7 +404,7 @@ export function ChatPane({
     <section
       onMouseDownCapture={onFocus}
       data-pane-id={paneId}
-      className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-(--agent-bg) shadow-[inset_1px_0_rgba(255,255,255,0.015)]"
+      className={chatPaneClassName(composerOnly)}
     >
       {showHeader ? (
         <AgentChatPaneHeader
@@ -355,105 +417,83 @@ export function ChatPane({
           onTogglePinned={togglePinnedSession}
           onRename={renameActiveSession}
           onFork={onForkSession}
-          onOpenTerminal={onOpenTerminal}
+          onOpenTerminal={terminalOwner ? toggleTerminalView : onOpenTerminal}
+          terminalOpen={terminalView}
           onExport={exportSession}
           onClose={onClose}
           onToggleRightPanel={onToggleRightPanel}
         />
       ) : null}
-      {visibleError ? (
-        <div
-          className="flex shrink-0 items-start gap-3 border-b border-(--border) bg-(--err)/10 px-4 py-2 text-xs text-(--err)"
-          role="alert"
-        >
-          <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{visibleError}</span>
-          {canRetry ? (
-            <button
-              type="button"
-              onClick={() => void retryLast()}
-              className="-my-0.5 inline-flex shrink-0 items-center gap-1 rounded-md border border-(--err)/30 px-1.5 py-0.5 text-(--err)/90 hover:bg-(--err)/10 hover:text-(--err)"
-              aria-label="Retry"
-              title="Resend the last message"
-            >
-              <ReloadIcon className="h-3 w-3 pointer-events-none" />
-              Retry
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={dismissVisibleError}
-            className="-my-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-(--err)/75 hover:bg-(--err)/10 hover:text-(--err)"
-            aria-label="Dismiss error"
-            title="Dismiss error"
-          >
-            <CloseIcon className="h-3 w-3 pointer-events-none" />
-          </button>
-        </div>
-      ) : null}
-      <div className="flex min-h-0 min-w-0 flex-1">
-        {showEmptyPrompt ? (
-          <EmptyPromptTimeline />
-        ) : (
-          <Timeline
-            key={activeTab?.id ?? "empty"}
-            stickToBottom={stickToBottom}
-            onStickToBottomChange={setStickToBottom}
-            messages={activeTab?.messages ?? []}
-            running={Boolean(running)}
-            onForkSession={onForkSession}
-            hasEarlier={activeTab?.historyCursor != null}
-            onLoadEarlier={loadEarlierHistory}
-          />
-        )}
+      <div className={terminalView ? "flex min-h-0 min-w-0 flex-1 flex-col" : "hidden"}>
+        <PersistentTerminals
+          active={terminalView}
+          activeOwnerKey={terminalSnapshot.activeOwnerKey}
+          terminals={terminalSnapshot.owners}
+        />
       </div>
-      <AgentComposerFrame
-        attachments={attachments}
-        browserToolEnabled={browserToolEnabled}
-        browserBackend={browserBackend}
-        canvasEnabled={canvasEnabled}
-        composerDragActive={composerDragActive}
-        contextWindow={effectiveContextWindow}
-        currentContextTokens={currentContextTokens}
-        cwd={cwd}
-        fileInputRef={fileInputRef}
-        gitBranch={gitBranch}
-        gitSummary={gitSummary}
-        input={activeTab?.input ?? ""}
-        mention={mention}
-        mentionIndex={mentionIndex}
-        mentionRows={mentionRows}
-        modelSelector={modelSelector}
-        onAbortTurn={() => void abortTurn()}
-        onAttachFiles={(files) => void attachFiles(files)}
-        onComposerChange={handleComposerChange}
-        onComposerDragLeave={handleComposerDragLeave}
-        onComposerDragOver={handleComposerDragOver}
-        onComposerDrop={handleComposerDrop}
-        onComposerKeyDown={handleComposerKeyDown}
-        onComposerPaste={handleComposerPaste}
-        onEditQueued={editQueued}
-        onInitGit={onInitGit}
-        onOpenStatus={openComputerStatus}
-        onQueueExpandedChange={setQueueExpanded}
-        onQueueMessage={() => void queueMessage()}
-        onRemoveAttachment={removeAttachment}
-        onRemoveLoadedContext={removeLoadedContext}
-        onRemoveQueued={removeQueued}
-        onSelectMention={(entry) => void selectMentionRow(entry)}
-        onSteerQueued={(queueId) => void steerQueued(queueId)}
-        onSubmit={sendMessage}
-        onToggleBrowserBackend={onToggleBrowserBackend}
-        onToggleBrowserTool={onToggleBrowserTool}
-        onToggleCanvas={onToggleCanvas}
-        promptTemplates={selectedPromptTemplates}
-        queueExpanded={queueExpanded}
-        queueItems={visibleQueueItems}
-        readingAttachments={readingAttachments}
+      <ChatTranscript
+        composerOnly={composerOnly}
+        terminalView={terminalView}
+        showEmptyPrompt={showEmptyPrompt}
+        activeTab={activeTab}
+        stickToBottom={stickToBottom}
+        setStickToBottom={setStickToBottom}
         running={Boolean(running)}
-        selectedSkills={selectedSkills}
-        status={activeTab?.status}
-        textareaRef={textareaRef}
+        onForkSession={onForkSession}
+        loadEarlierHistory={loadEarlierHistory}
       />
+      <div className={terminalView ? "hidden" : "contents"}>
+        <AgentComposerFrame
+          attachments={attachments}
+          browserToolEnabled={browserToolEnabled}
+          browserBackend={browserBackend}
+          canvasEnabled={canvasEnabled}
+          composerDragActive={composerDragActive}
+          contextWindow={effectiveContextWindow}
+          currentContextTokens={currentContextTokens}
+          cwd={cwd}
+          fileInputRef={fileInputRef}
+          gitBranch={gitBranch}
+          gitSummary={gitSummary}
+          input={activeTab?.input ?? ""}
+          mention={mention}
+          mentionIndex={mentionIndex}
+          mentionRows={mentionRows}
+          modelSupportsVision={modelSupportsVision}
+          modelSelector={modelSelector}
+          onAbortTurn={() => void abortTurn()}
+          onAttachFiles={(files) => void attachFiles(files)}
+          onComposerChange={handleComposerChange}
+          onComposerDragLeave={handleComposerDragLeave}
+          onComposerDragOver={handleComposerDragOver}
+          onComposerDrop={handleComposerDrop}
+          onComposerKeyDown={handleComposerKeyDown}
+          onComposerPaste={handleComposerPaste}
+          onEditQueued={editQueued}
+          onInitGit={onInitGit}
+          onOpenStatus={openComputerStatus}
+          onQueueExpandedChange={setQueueExpanded}
+          onRemoveAttachment={removeAttachment}
+          onRemoveLoadedContext={removeLoadedContext}
+          onRemoveQueued={removeQueued}
+          onSelectMention={(entry) => void selectMentionRow(entry)}
+          onSteerQueued={(queueId) => void steerQueued(queueId)}
+          onSubmit={sendMessage}
+          onToggleBrowserBackend={onToggleBrowserBackend}
+          onToggleBrowserTool={onToggleBrowserTool}
+          onToggleCanvas={onToggleCanvas}
+          promptTemplates={selectedPromptTemplates}
+          queueExpanded={queueExpanded}
+          queueItems={visibleQueueItems}
+          readingAttachments={readingAttachments}
+          running={Boolean(running)}
+          selectedSkills={selectedSkills}
+          status={activeTab?.status}
+          textareaRef={textareaRef}
+          floating={composerOnly}
+          dense={!showHeader && !composerOnly}
+        />
+      </div>
     </section>
   );
 }

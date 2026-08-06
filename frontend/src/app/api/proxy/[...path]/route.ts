@@ -7,6 +7,9 @@ import {
   fetchWithOptionalFallback,
   getForwardedSearchParams,
   isAbortError,
+  ProxyBodyTooLargeError,
+  proxyRequestBodyLimit,
+  readProxyRequestBody,
 } from "./proxy-fetch";
 import { toProxyNextResponse } from "./proxy-response";
 import { resolveProxyTarget } from "./proxy-target";
@@ -63,7 +66,7 @@ async function handleRequest(request: NextRequest, method: string, path: string[
     const hasAuth = Boolean(request.headers.get("authorization"));
     logProxyAccess({ client, hasAuth, method, overrideUrl: target.overrideUrl, path });
 
-    const body = method !== "GET" && method !== "DELETE" ? await request.text() : undefined;
+    const body = await readProxyRequestBody(request, method, proxyRequestBodyLimit(path));
     const headers = buildProxyRequestHeaders(
       request,
       target.apiKey,
@@ -99,6 +102,9 @@ async function handleRequest(request: NextRequest, method: string, path: string[
     }
     if (isAbortError(error)) {
       return NextResponse.json({ error: "Backend request timed out" }, { status: 504 });
+    }
+    if (error instanceof ProxyBodyTooLargeError) {
+      return NextResponse.json({ error: error.message }, { status: 413 });
     }
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }

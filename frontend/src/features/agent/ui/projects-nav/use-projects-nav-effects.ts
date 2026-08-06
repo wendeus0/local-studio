@@ -1,14 +1,10 @@
 import { useCallback, useSyncExternalStore, type Dispatch, type SetStateAction } from "react";
+import type { AggregatedSession } from "@shared/agent/session-summary";
 
 import { safeJson } from "@/features/agent/safe-json";
-import {
-  mergeActiveAgentSessions,
-  type ActiveAgentSessionSnapshot,
-} from "@/features/agent/active-sessions";
 import type { Project as ProjectEntry } from "@/features/agent/projects/types";
 import type { SessionSummary } from "@/features/agent/session-summary";
 import {
-  ACTIVE_AGENT_SESSIONS_EVENT,
   ADD_PROJECT_EVENT,
   SESSION_PREFS_CHANGED_EVENT,
   SESSIONS_CHANGED_EVENT,
@@ -21,12 +17,10 @@ import {
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 
 type PinnedSession = SessionSummary & { project: ProjectEntry };
-type ActiveAgentSession = ActiveAgentSessionSnapshot;
-type PinnedActiveSession = ActiveAgentSession & {
-  id: string;
-  firstUserMessage: string | null;
-  project: ProjectEntry;
-};
+
+function uniquePinnedSessions(sessions: readonly PinnedSession[]): PinnedSession[] {
+  return [...new Map(sessions.map((session) => [session.id, session])).values()];
+}
 
 let cachedSessionPrefs: SessionPrefs = {};
 let cachedSessionPrefsKey = "";
@@ -96,42 +90,18 @@ export function useProjectsNavAddProjectEffect(handleAddProject: () => void): vo
   }, [handleAddProject]);
 }
 
-export function useActiveAgentSessionsEffect({
-  setActiveSessions,
-}: {
-  setActiveSessions: Dispatch<SetStateAction<ActiveAgentSession[]>>;
-}): void {
-  useMountSubscription(() => {
-    const onActiveSessions = (event: Event) => {
-      const detail = (event as CustomEvent<{ sessions?: ActiveAgentSession[] }>).detail;
-      const sessions = Array.isArray(detail?.sessions) ? detail.sessions : [];
-      // The broadcaster (workspace effects) already persisted this snapshot
-      // before dispatching — re-persisting here was a double merge+write.
-      setActiveSessions(
-        sessions.length > 0 ? mergeActiveAgentSessions([], sessions, loadSessionPrefs()) : [],
-      );
-    };
-    window.addEventListener(ACTIVE_AGENT_SESSIONS_EVENT, onActiveSessions);
-    return () => window.removeEventListener(ACTIVE_AGENT_SESSIONS_EVENT, onActiveSessions);
-  }, [setActiveSessions]);
-}
-
 export function usePinnedSessionsEffect({
-  activePiSessionIdsKey,
-  activeSessions,
   expanded,
   hiddenPrefIdsKey,
   pinnedPrefIdsKey,
   projects,
   setPinnedSessions,
 }: {
-  activePiSessionIdsKey: string;
-  activeSessions: ActiveAgentSession[];
   expanded: boolean;
   hiddenPrefIdsKey: string;
   pinnedPrefIdsKey: string;
   projects: ProjectEntry[];
-  setPinnedSessions: Dispatch<SetStateAction<Array<PinnedSession | PinnedActiveSession>>>;
+  setPinnedSessions: Dispatch<SetStateAction<PinnedSession[]>>;
 }): void {
   useMountSubscription(() => {
     if (!expanded || projects.length === 0) {
@@ -146,70 +116,35 @@ export function usePinnedSessionsEffect({
     const pinnedIdsList = pinnedPrefIdsKey.split("\u0000").filter(Boolean);
     const pinnedIds = new Set(pinnedIdsList);
     const hiddenIds = new Set(hiddenPrefIdsKey.split("\u0000").filter(Boolean));
-    const projectsById = new Map(projects.map((project) => [project.id, project] as const));
-    const activePinnedRows: PinnedActiveSession[] = activeSessions
-      .filter((session) => {
-        const keys = [session.piSessionId, `tab:${session.paneId}:${session.tabId}`].filter(
-          (id): id is string => Boolean(id),
-        );
-        return keys.some((id) => pinnedIds.has(id)) && !keys.some((id) => hiddenIds.has(id));
-      })
-      .flatMap((session) => {
-        const project = projectsById.get(session.projectId);
-        if (!project) return [];
-        return [
-          {
-            ...session,
-            id: session.piSessionId ?? `tab:${session.paneId}:${session.tabId}`,
-            firstUserMessage: session.title,
-            project,
-          },
-        ];
-      });
     const idsParam = encodeURIComponent(pinnedIdsList.join(","));
+    const projectsById = new Map(projects.map((project) => [project.id, project]));
     (async () => {
-      const rows = await Promise.all(
-        projects.map(async (project) => {
-          try {
-            const response = await fetch(
-              `/api/agent/sessions?cwd=${encodeURIComponent(project.path)}&since=30d&ids=${idsParam}`,
-              { cache: "no-store" },
-            );
-            const payload = await safeJson<{ sessions?: SessionSummary[] }>(response);
-            return (payload.sessions ?? [])
-              .filter((session) => pinnedIds.has(session.id) && !hiddenIds.has(session.id))
-              .map((session) => ({ ...session, project }));
-          } catch {
-            return [];
-          }
-        }),
-      );
-      if (!cancelled) {
-        const activeIds = new Set(activePinnedRows.map((session) => session.piSessionId));
-        setPinnedSessions(
-          [
-            ...activePinnedRows,
-            ...rows.flat().filter((session) => !activeIds.has(session.id)),
-          ].sort(
-            (a, b) =>
-              new Date(("startedAt" in b ? b.startedAt : undefined) || b.updatedAt).getTime() -
-              new Date(("startedAt" in a ? a.startedAt : undefined) || a.updatedAt).getTime(),
-          ),
-        );
+      try {
+        const response = await fetch(`/api/agent/sessions/all?since=30d&ids=${idsParam}`, {
+          cache: "no-store",
+        });
+        const payload = await safeJson<{ sessions?: AggregatedSession[] }>(response);
+        const rows = (payload.sessions ?? []).flatMap((session) => {
+          const project = projectsById.get(session.projectId);
+          return project && pinnedIds.has(session.id) && !hiddenIds.has(session.id)
+            ? [{ ...session, project }]
+            : [];
+        });
+        if (!cancelled) {
+          setPinnedSessions(
+            uniquePinnedSessions(rows).sort(
+              (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
+            ),
+          );
+        }
+      } catch {
+        if (!cancelled) setPinnedSessions([]);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [
-    activePiSessionIdsKey,
-    activeSessions,
-    expanded,
-    hiddenPrefIdsKey,
-    pinnedPrefIdsKey,
-    projects,
-    setPinnedSessions,
-  ]);
+  }, [expanded, hiddenPrefIdsKey, pinnedPrefIdsKey, projects, setPinnedSessions]);
 }
 
 export function useProjectSessionsReloadEffect(reload: () => Promise<void>): void {

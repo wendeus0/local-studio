@@ -5,6 +5,10 @@ import { join, relative, resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const contractNames = [
   "Backend",
+  "ServeRuntimeKind",
+  "ServeRuntime",
+  "Serve",
+  "ServePayload",
   "RecipeBase",
   "RecipePayload",
   "DownloadStatus",
@@ -61,19 +65,18 @@ const contractNames = [
   "RigsPayload",
 ];
 const allowedFiles = new Set([
-  "shared/contracts/recipes.ts",
-  "shared/contracts/system.ts",
-  "shared/contracts/controller-events.ts",
-  "shared/contracts/observability.ts",
-  "shared/contracts/usage.ts",
-  "shared/contracts/environments.ts",
-  "shared/contracts/rigs.ts",
+  "controller/contracts/recipes.ts",
+  "controller/contracts/system.ts",
+  "controller/contracts/controller-events.ts",
+  "controller/contracts/observability.ts",
+  "controller/contracts/usage.ts",
+  "controller/contracts/rigs.ts",
   "controller/src/modules/shared/recipe-types.ts",
   "controller/src/modules/shared/system-types.ts",
   "frontend/src/lib/types.ts",
   "frontend/src/lib/controller-events-contract.ts",
 ]);
-const scanRoots = ["shared", "controller/src", "frontend/src"];
+const scanRoots = ["shared", "controller/contracts", "controller/src", "frontend/src"];
 const findings = [];
 const exportedDeclarations = new Map();
 
@@ -90,7 +93,7 @@ function walk(dir) {
 }
 
 function inspect(filePath) {
-  const rel = relative(root, filePath);
+  const rel = relative(root, filePath).replaceAll("\\", "/");
   const source = readFileSync(filePath, "utf8");
   collectExportedDeclarations(rel, source);
   for (const name of contractNames) {
@@ -115,7 +118,7 @@ for (const scanRoot of scanRoots) {
 }
 
 if (findings.length > 0) {
-  console.error("Shared contract check failed. Move these declarations to shared/contracts:");
+  console.error("Shared contract check failed. Move these declarations to controller/contracts:");
   for (const finding of findings) console.error(`- ${finding}`);
   process.exit(1);
 }

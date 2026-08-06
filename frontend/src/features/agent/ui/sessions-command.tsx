@@ -7,16 +7,13 @@ import { ChatIcon, Folder } from "@/ui/icons";
 import { cleanSessionTitle } from "@/features/agent/messages/helpers";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 
-import {
-  type ActiveSession,
-  type AggregatedSession,
-  indexActiveByPiId,
-} from "@/features/agent/session-contracts";
+import { type ActiveSession, indexOpenByThreadId } from "@/features/agent/session-contracts";
+import type { AggregatedSession } from "@shared/agent/session-summary";
 
 type Props = {
   open: boolean;
   onClose: () => void;
-  activeSessions: ActiveSession[];
+  activeSessions: readonly ActiveSession[];
 };
 
 type AppDestination = {
@@ -40,26 +37,21 @@ const APP_DESTINATIONS: AppDestination[] = [
     description: "Token, request, and model usage analytics.",
   },
   {
-    href: "/recipes",
-    label: "Models",
-    keywords: "models recipes launch downloads search hugging face explore",
-    description: "Search models, manage recipes, launches, and downloads.",
-  },
-  {
-    href: "/server",
-    label: "Server",
-    keywords: "logs api docs swagger controller endpoints",
-    description: "Server logs and controller API documentation.",
+    href: "/configure",
+    label: "Configure",
+    keywords:
+      "machines hardware models recipes launch downloads integrations mcp connectors plugins skills server logs api docs swagger controller engines runtime",
+    description: "Manage machines, models, integrations, and the controller.",
   },
   {
     href: "/agent",
-    label: "Agent",
-    keywords: "chat projects browser terminal tools canvas files",
-    description: "Project-aware agent workspace and tools.",
+    label: "Workbench",
+    keywords: "agent chat projects browser terminal tools canvas files",
+    description: "Project-aware chat, terminals, files, and tools.",
   },
   {
     href: "/agent/sessions",
-    label: "Agent Sessions",
+    label: "Chat history",
     keywords: "history archived transcripts pi sessions runs",
     description: "Search and inspect stored agent sessions.",
   },
@@ -122,7 +114,7 @@ export function SessionsCommand({ open, onClose, activeSessions }: Props) {
     return () => cancelAnimationFrame(frame);
   }, [open]);
 
-  const activeByPiId = useMemo(() => indexActiveByPiId(activeSessions), [activeSessions]);
+  const openByThreadId = useMemo(() => indexOpenByThreadId(activeSessions), [activeSessions]);
 
   const liveOnlyActives = useMemo(
     () => activeSessions.filter((session) => isRunning(session.status)),
@@ -144,7 +136,7 @@ export function SessionsCommand({ open, onClose, activeSessions }: Props) {
 
   const destinationFiltered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return APP_DESTINATIONS.slice(0, 6);
+    if (!q) return APP_DESTINATIONS.slice(0, 8);
     return APP_DESTINATIONS.filter((destination) =>
       `${destination.label} ${destination.keywords} ${destination.description}`
         .toLowerCase()
@@ -179,7 +171,7 @@ export function SessionsCommand({ open, onClose, activeSessions }: Props) {
       const session = liveFiltered[liveIndex];
       router.push(
         `/agent?project=${encodeURIComponent(session.projectId)}${
-          session.piSessionId ? `&session=${encodeURIComponent(session.piSessionId)}` : ""
+          session.threadId ? `&session=${encodeURIComponent(session.threadId)}` : ""
         }&replace=1`,
       );
       onClose();
@@ -196,14 +188,14 @@ export function SessionsCommand({ open, onClose, activeSessions }: Props) {
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <button
-        className="absolute inset-0 bg-black/55 backdrop-blur-sm"
+        className="absolute inset-0 bg-(--color-background)"
         onClick={onClose}
         aria-label="Close session search"
       />
       <div
         role="dialog"
         aria-modal="true"
-        className="relative z-10 flex max-h-[68vh] w-[min(720px,92vw)] flex-col overflow-hidden rounded-2xl border border-(--border) bg-(--surface) shadow-[0_24px_80px_rgba(0,0,0,0.5)]"
+        className="relative z-10 flex max-h-[68vh] w-[min(720px,92vw)] flex-col overflow-hidden rounded-2xl border border-(--color-popover-border) bg-(--color-popover) shadow-[0px_16px_32px_-8px_rgba(0,0,0,0.3),0px_0px_0px_0.5px_rgba(0,0,0,0.1)]"
         onKeyDown={(event) => {
           if (event.key === "ArrowDown") {
             event.preventDefault();
@@ -281,7 +273,7 @@ export function SessionsCommand({ open, onClose, activeSessions }: Props) {
                 const active = selectedIndex === i;
                 return (
                   <button
-                    key={`live:${session.paneId}:${session.tabId}`}
+                    key={`live:${session.id}`}
                     type="button"
                     onMouseEnter={() => setHighlight(i)}
                     onClick={() => commit(i)}
@@ -306,7 +298,7 @@ export function SessionsCommand({ open, onClose, activeSessions }: Props) {
               {filtered.map((session, index) => {
                 const i = destinationFiltered.length + liveFiltered.length + index;
                 const active = selectedIndex === i;
-                const running = activeByPiId.has(session.id);
+                const running = openByThreadId.has(session.id);
                 const label =
                   cleanSessionTitle(session.firstUserMessage) ||
                   `Session ${session.id.slice(0, 8)}`;

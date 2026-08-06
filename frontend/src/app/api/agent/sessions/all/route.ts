@@ -1,25 +1,22 @@
 import { NextRequest } from "next/server";
 import { existsSync, statSync } from "node:fs";
 import { listProjectsFromStore } from "@local-studio/agent-runtime/projects-store";
-import { listSessions, type SessionSummary } from "@local-studio/agent-runtime/sessions-store";
+import { listSessions } from "@local-studio/agent-runtime/sessions-store";
+import type { AggregatedSession } from "@shared/agent/session-summary";
 import { listArchivedSessionMetadata } from "@local-studio/agent-runtime/session-metadata-store";
 import { archiveQueryOptions, parseRelativeSince } from "../session-query";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Aggregated session index across every registered project. The agent
-// sidebar/dashboard loads this once and then filters/searches client-side so
-// search-as-you-type stays snappy without per-keystroke fetches.
-type AggregatedSession = SessionSummary & {
-  projectId: string;
-  projectName: string;
-  projectPath: string;
-};
-
 export async function GET(request: NextRequest) {
   const sinceParam = request.nextUrl.searchParams.get("since");
   const since = parseRelativeSince(sinceParam) ?? undefined;
+  const ids = request.nextUrl.searchParams
+    .get("ids")
+    ?.split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
   const archive = archiveQueryOptions(request.nextUrl.searchParams);
   const projects = listProjectsFromStore();
   const aggregated: AggregatedSession[] = [];
@@ -30,6 +27,7 @@ export async function GET(request: NextRequest) {
         if (!existsSync(project.path) || !statSync(project.path).isDirectory()) return;
         const sessions = await listSessions(project.path, {
           ...(since && !archive.archivedOnly ? { since } : {}),
+          ids,
           ...archive,
         });
         for (const summary of sessions) {

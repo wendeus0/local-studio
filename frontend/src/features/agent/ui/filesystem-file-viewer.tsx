@@ -3,7 +3,7 @@
 import { useCallback, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { Virtuoso } from "react-virtuoso";
 import { MessageSquarePlus, Minus } from "@/ui/icon-registry";
-import { highlightFenced } from "@/features/agent/highlight-cache";
+import { highlightLines } from "@/features/agent/highlight-cache";
 import type { FileComment } from "@/features/agent/filesystem-types";
 
 const EXT_TO_LANG: Record<string, string> = {
@@ -88,7 +88,7 @@ export function FileViewer({
   const highlightedLines = useMemo(() => {
     const lang = languageForPath(filePath);
     if (!lang) return null;
-    return highlightFenced(lang, lines.join("\n")).split("\n");
+    return highlightLines(lang, lines);
   }, [filePath, lines]);
   const commentsByLine = useMemo(() => {
     const map = new Map<number, FileComment[]>();
@@ -136,7 +136,7 @@ export function FileViewer({
       return (
         <div className="group flex flex-col">
           <div
-            className="flex items-start gap-1 px-1 hover:bg-(--color-surface-hover)"
+            className="flex items-start gap-1 px-1 hover:bg-(--hover)"
             onMouseEnter={() => {
               lastLineRef.current = lineNumber;
             }}
@@ -149,7 +149,7 @@ export function FileViewer({
             </span>
             {html ? (
               <pre
-                className="min-w-0 flex-1 whitespace-pre font-mono text-(--fg)"
+                className="syntax-highlight min-w-0 flex-1 whitespace-pre font-mono text-(--fg)"
                 style={{ fontSize, lineHeight: `${lineHeight}px` }}
                 dangerouslySetInnerHTML={{ __html: html || "&nbsp;" }}
               />
@@ -178,7 +178,7 @@ export function FileViewer({
           {lineComments?.map((comment) => (
             <div
               key={comment.id}
-              className="ml-9 mr-2 my-0.5 flex items-start gap-2 rounded-md border border-(--border)/60 bg-(--color-input) px-2 py-1 text-[length:var(--fs-xs)] text-(--fg)/85"
+              className="ml-9 mr-2 my-0.5 flex items-start gap-2 rounded-md border border-(--separator) bg-(--color-input) px-2 py-1 text-[length:var(--fs-xs)] text-(--fg)/85"
             >
               <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{comment.body}</span>
               <button

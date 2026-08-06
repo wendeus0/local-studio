@@ -8,9 +8,9 @@ import type { OpenAICompletionsCompat } from "@earendil-works/pi-ai";
 import {
   normalizeOpenAIModels,
   inferReasoningSupport,
-  inferVisionSupport,
   type AgentModel,
 } from "../../../shared/agent/models";
+import { resolveModelVision } from "../../../controller/contracts/model-capabilities";
 
 const PROVIDER_ID = "local-studio";
 const USER_PI_PREFIX = "user-pi-";
@@ -80,7 +80,7 @@ function userPiModelToAgentModel(
     contextWindow: model.contextWindow ?? 128_000,
     maxTokens: model.maxTokens ?? 65_536,
     reasoning: model.reasoning ?? inferReasoningSupport(rawId),
-    vision: inputs.includes("image") || inferVisionSupport(rawId),
+    vision: resolveModelVision({ identifiers: [rawId], modalities: [inputs] }),
     active: false,
   };
 }

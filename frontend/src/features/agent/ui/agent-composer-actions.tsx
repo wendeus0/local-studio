@@ -2,9 +2,9 @@
 
 import type { ReactNode, RefObject } from "react";
 import { Spinner } from "@/ui";
-import { Code2, Plus } from "@/ui/icon-registry";
+import { ArrowUp, Code2, Plus } from "@/ui/icon-registry";
 import type { BrowserBackend } from "@/features/agent/tools/types";
-import { GlobeIcon, PanelIcon, SendIcon, SitegeistIcon, StopIcon } from "@/ui/icons";
+import { GlobeIcon, PanelIcon, SitegeistIcon, StopIcon } from "@/ui/icons";
 
 export function AgentComposerActions({
   fileInputRef,
@@ -20,7 +20,6 @@ export function AgentComposerActions({
   onToggleBrowserTool,
   canvasEnabled,
   onToggleCanvas,
-  onQueueMessage,
   onAbortTurn,
   modelSelector,
 }: {
@@ -37,7 +36,6 @@ export function AgentComposerActions({
   onToggleBrowserTool: () => void;
   canvasEnabled: boolean;
   onToggleCanvas: () => void;
-  onQueueMessage: () => void;
   onAbortTurn: () => void;
   modelSelector?: ReactNode;
 }) {
@@ -46,11 +44,11 @@ export function AgentComposerActions({
   const usingSitegeist = browserBackend === "sitegeist";
   const browserBackendLabel = usingSitegeist ? "Sitegeist relay" : "embedded panel";
   const browserBackendTarget = usingSitegeist ? "embedded panel" : "Sitegeist relay";
-  const inactiveIconClass = "text-(--dim)/75 hover:bg-(--hover) hover:text-(--fg)/85";
-  const activeIconClass = "bg-(--hover) text-(--fg)/85 hover:text-(--fg)";
+  const inactiveIconClass = "text-(--hl2) hover:bg-(--hover) hover:text-(--fg)";
+  const activeIconClass = "bg-(--active) text-(--fg)";
 
   return (
-    <div className="agent-composer-actions-row flex min-h-8 items-center gap-1.5 bg-transparent px-3 pb-1.5 pt-0.5 text-xs">
+    <div className="agent-composer-actions-row flex min-h-8 items-center gap-1 bg-transparent px-2.5 pb-2 pt-0.5 text-xs">
       <input
         ref={fileInputRef}
         type="file"
@@ -62,11 +60,11 @@ export function AgentComposerActions({
         type="button"
         onClick={() => fileInputRef.current?.click()}
         disabled={readingAttachments || running}
-        className="inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-md text-(--dim)/75 hover:bg-(--hover) hover:text-(--fg)/85 disabled:opacity-30"
+        className="inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-full text-(--hl2) hover:bg-(--hover) hover:text-(--fg) disabled:opacity-30"
         aria-label="Attach files"
         title="Attach files (or paste/drop into composer)"
       >
-        <Plus className="h-3.5 w-3.5" />
+        <Plus className="h-4 w-4" strokeWidth={1.75} />
       </button>
       <button
         type="button"
@@ -78,10 +76,10 @@ export function AgentComposerActions({
             ? "Browser tool: ON — agent can drive the browser"
             : "Browser tool: OFF — click to let the agent navigate, click, fill, and read pages"
         }
-        className={`inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-md ${browserToolEnabled ? activeIconClass : inactiveIconClass}`}
+        className={`inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-full ${browserToolEnabled ? activeIconClass : inactiveIconClass}`}
       >
         <span className="relative inline-flex">
-          <GlobeIcon className="h-3.5 w-3.5" />
+          <GlobeIcon className="h-4 w-4" />
         </span>
       </button>
       {browserToolEnabled ? (
@@ -89,13 +87,13 @@ export function AgentComposerActions({
           type="button"
           onClick={onToggleBrowserBackend}
           aria-label={`Browser backend: ${browserBackendLabel}. Switch to ${browserBackendTarget}.`}
-          className={`inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-md ${usingSitegeist ? activeIconClass : inactiveIconClass}`}
+          className={`inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-full ${usingSitegeist ? activeIconClass : inactiveIconClass}`}
           title={`Browser: ${browserBackendLabel}. Click to use ${browserBackendTarget}.`}
         >
           {usingSitegeist ? (
-            <SitegeistIcon className="h-3.5 w-3.5" />
+            <SitegeistIcon className="h-4 w-4" />
           ) : (
-            <PanelIcon className="h-3.5 w-3.5" />
+            <PanelIcon className="h-4 w-4" />
           )}
         </button>
       ) : null}
@@ -109,9 +107,9 @@ export function AgentComposerActions({
             ? "Canvas: ON — shared scratchboard tools loaded; model reads/writes the canvas"
             : "Canvas: OFF — click to share a scratchboard with the model (notes, plans, links, state)"
         }
-        className={`inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-md ${canvasEnabled ? activeIconClass : inactiveIconClass}`}
+        className={`inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-full ${canvasEnabled ? activeIconClass : inactiveIconClass}`}
       >
-        <Code2 className="h-3.5 w-3.5" />
+        <Code2 className="h-4 w-4" strokeWidth={1.5} />
       </button>
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {modelSelector}
@@ -126,30 +124,20 @@ export function AgentComposerActions({
                 Starting…
               </span>
             ) : inputHasText ? (
-              <>
-                <button
-                  type="button"
-                  onClick={onQueueMessage}
-                  className="inline-flex !h-7 !min-h-7 shrink-0 items-center px-1.5 text-[length:var(--fs-sm)] text-(--dim) underline-offset-2 hover:text-(--fg) hover:underline"
-                  title="Queue (Tab)"
-                >
-                  Queue
-                </button>
-                <button
-                  type="submit"
-                  className="inline-flex !h-7 !min-h-7 shrink-0 items-center gap-1 rounded-md bg-(--hover) px-2 text-[length:var(--fs-sm)] text-(--fg)/80 hover:text-(--fg)"
-                  title="Steer (Enter): interrupt current turn and send"
-                >
-                  <SendIcon className="h-3 w-3" /> Steer
-                </button>
-              </>
+              <button
+                type="submit"
+                className="inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-full bg-(--fg) text-(--bg) transition-opacity hover:opacity-85"
+                aria-label="Steer current task"
+                title="Steer current task (Enter) · Queue instead (Tab)"
+              >
+                <ArrowUp className="h-3.5 w-3.5 stroke-[2.25]" />
+              </button>
             ) : null}
-            {/* Codex's morphing submit: while streaming the circle becomes Stop. */}
             <button
               type="button"
               onClick={onAbortTurn}
               disabled={starting}
-              className="inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-full bg-(--fg) text-(--bg) transition-opacity hover:opacity-85 disabled:opacity-30"
+              className={`inline-flex !h-7 !min-h-7 !w-7 !min-w-7 shrink-0 items-center justify-center rounded-full transition-opacity hover:opacity-85 disabled:opacity-30 ${inputHasText ? "bg-(--hover) text-(--fg)" : "bg-(--fg) text-(--bg)"}`}
               aria-label="Stop"
               title="Stop (Esc)"
             >
@@ -164,7 +152,7 @@ export function AgentComposerActions({
             aria-label="Send"
             title="Send (Enter) · Queue (Tab)"
           >
-            {starting ? <Spinner size="sm" /> : <SendIcon className="h-3.5 w-3.5" />}
+            {starting ? <Spinner size="sm" /> : <ArrowUp className="h-3.5 w-3.5 stroke-[2.25]" />}
           </button>
         )}
       </div>

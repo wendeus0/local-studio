@@ -7,11 +7,10 @@ import { clampComputerWidth, gentlySnapComputerWidth } from "@/features/agent/to
 import { createInitialState, reducer } from "@/features/agent/workspace/store";
 import {
   createSessionReplayQueue,
+  type ReplayDrainCounters,
   type SessionReplayQueue,
 } from "@/features/agent/workspace/replay-queue";
 import { makeFreshTab, newPaneId } from "@/features/agent/messages/helpers";
-import { closeTerminalOwner } from "@/features/agent/ui/terminal-panel";
-import { rememberPersistentTerminalOwner } from "@/features/agent/ui/use-persistent-terminal-owners";
 import {
   runWorkspaceEffect,
   type WorkspaceDispatch,
@@ -26,14 +25,18 @@ import type {
 } from "@/features/agent/workspace/types";
 import { useProjects } from "@/features/agent/projects/context";
 import { useToolsRef } from "@/features/agent/tools/context";
-import { BACKEND_URL_STORAGE_KEY } from "@/lib/api/connection";
-import { CONTROLLERS_STORAGE_KEY } from "@/lib/api/controllers";
-import { paneSessions } from "@/features/agent/runtime/selectors";
+import { BACKEND_URL_STORAGE_KEY, getApiKey, getStoredBackendUrl } from "@/lib/api/connection";
+import {
+  CONTROLLERS_STORAGE_KEY,
+  loadSavedControllers,
+  normalizeControllerUrl,
+} from "@/lib/api/controllers";
+import type { Session, UpdateSession } from "@/features/agent/runtime/types";
 import {
   useWorkspaceHydrationEffects,
   useWorkspaceRuntimeSync,
 } from "@/features/agent/ui/use-workspace-effects";
-import type { ChatPaneHandle, SessionTab } from "@/features/agent/ui/chat-pane";
+import type { ChatPaneHandle } from "@/features/agent/ui/chat-pane";
 import type { SessionDropPayload } from "@/features/agent/ui/pane-grid";
 
 export type WorkspaceHandles = {
@@ -41,15 +44,12 @@ export type WorkspaceHandles = {
   openSessionPayloadInPane: (paneId: PaneId, payload: SessionDropPayload) => void;
   renameTab: (paneId: PaneId, tabId: string, title: string) => void;
   splitTabIntoNewPane: (paneId: PaneId, tabId: string) => void;
-  openTerminalPane: (paneId?: PaneId) => void;
-  splitTerminal: (paneId: PaneId, direction: "vertical" | "horizontal") => void;
   registerPaneHandle: (paneId: PaneId, handle: ChatPaneHandle | null) => void;
   compactFocusedSession: () => Promise<void>;
   setSplitRatio: (path: number[], ratio: number) => void;
-  setPaneTabs: (
-    paneId: PaneId,
-    tabs: SessionTab[] | ((tabs: SessionTab[]) => SessionTab[]),
-  ) => void;
+  updateSession: UpdateSession;
+  updateDetachedSession: (fallback: Session, patch: Parameters<UpdateSession>[1]) => void;
+  removeDetachedSession: (sessionId: string) => void;
   closePane: (paneId: PaneId) => void;
   splitPaneWithPayload: (
     paneId: PaneId,
@@ -67,6 +67,7 @@ export type UseWorkspaceResult = {
   state: WorkspaceState;
   dispatch: WorkspaceDispatch;
   handles: WorkspaceHandles;
+  replayDebug: () => Readonly<Record<PaneId, Readonly<ReplayDrainCounters>>>;
 };
 
 export type UseWorkspaceOptions = {
@@ -89,16 +90,45 @@ function createMemoryStorage(): Pick<Storage, "getItem" | "setItem" | "removeIte
 function createWorkspaceWindow(source: Window): WorkspaceWindow {
   return {
     Event,
-    CustomEvent,
     dispatchEvent: source.dispatchEvent.bind(source),
-    addEventListener: source.addEventListener.bind(source),
-    removeEventListener: source.removeEventListener.bind(source),
     setTimeout: source.setTimeout.bind(source),
   };
 }
 
+function agentModelControllersPayload() {
+  const byUrl = new Map<string, { url: string; apiKey?: string; name?: string }>();
+  const activeUrl = normalizeControllerUrl(getStoredBackendUrl());
+  if (activeUrl) {
+    const activeApiKey = getApiKey();
+    byUrl.set(activeUrl, {
+      url: activeUrl,
+      ...(activeApiKey ? { apiKey: activeApiKey } : {}),
+      name: "primary",
+    });
+  }
+  for (const controller of loadSavedControllers()) {
+    const url = normalizeControllerUrl(controller.url);
+    if (!url) continue;
+    const existing = byUrl.get(url);
+    byUrl.set(url, {
+      ...existing,
+      url,
+      ...(controller.apiKey || existing?.apiKey
+        ? { apiKey: controller.apiKey || existing?.apiKey }
+        : {}),
+      ...(controller.name || existing?.name ? { name: controller.name || existing?.name } : {}),
+    });
+  }
+  return [...byUrl.values()];
+}
+
 async function loadAgentModelsPayload(): Promise<{ models?: AgentModel[]; error?: string }> {
-  const response = await fetch("/api/agent/models", { cache: "no-store" });
+  const response = await fetch("/api/agent/models", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({ controllers: agentModelControllersPayload() }),
+  });
   const payload = await safeJson<{ models?: AgentModel[]; error?: string }>(response);
   if (!response.ok) throw new Error(payload.error || "Failed to load models");
   return payload;
@@ -134,6 +164,7 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
       getHandle: (paneId) => paneHandlesRef.current.get(paneId),
       getState: () => stateRef.current,
       setTimeout: (handler, delay) => window.setTimeout(handler, delay),
+      instrument: true,
     });
     return replayQueueRef.current;
   }, []);
@@ -152,10 +183,7 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
         api: api(),
         dispatch: workspaceDispatch,
         queueReplay: queueSessionReplay,
-        findProjectById: (id) => projectsRef.current.findById(id),
         selectionFor: (id) => toolsRef.current.selectionFor(id),
-        closeTerminalOwner,
-        rememberTerminalOwner: rememberPersistentTerminalOwner,
       };
     };
 
@@ -228,15 +256,6 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
           newPaneId: newPaneId(),
           tab: makeFreshTab(),
         }),
-      openTerminalPane: (paneId?: PaneId) =>
-        dispatch({ type: "openTerminalPane", ...(paneId ? { sourcePaneId: paneId } : {}) }),
-      splitTerminal: (paneId: PaneId, direction: "vertical" | "horizontal") =>
-        dispatch({
-          type: "splitTerminalPane",
-          sourcePaneId: paneId,
-          newPaneId: newPaneId(),
-          direction,
-        }),
       registerPaneHandle: (paneId: PaneId, handle: ChatPaneHandle | null) => {
         if (handle) paneHandlesRef.current.set(paneId, handle);
         else paneHandlesRef.current.delete(paneId);
@@ -248,22 +267,13 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
       },
       setSplitRatio: (path: number[], ratio: number) =>
         dispatch({ type: "setSplitRatio", path, ratio }),
-      setPaneTabs: (
-        paneId: PaneId,
-        tabs: SessionTab[] | ((tabs: SessionTab[]) => SessionTab[]),
-      ) => {
-        const pane = stateRef.current.panesById.get(paneId);
-        if (!pane) return;
-        const current = paneSessions(stateRef.current, paneId);
-        const next = typeof tabs === "function" ? tabs(current) : tabs;
-        const session = next.at(-1) ?? current[0];
-        if (!session) return;
-        dispatch({
-          type: "setPaneSession",
-          paneId,
-          session,
-        });
+      updateSession: (sessionId, patch) => dispatch({ type: "patchSession", sessionId, patch }),
+      updateDetachedSession: (fallback: Session, patch: Parameters<UpdateSession>[1]) => {
+        const current = stateRef.current.sessions.get(fallback.id) ?? fallback;
+        dispatch({ type: "setDetachedSession", session: patch(current) });
       },
+      removeDetachedSession: (sessionId: string) =>
+        dispatch({ type: "removeDetachedSession", sessionId }),
       closePane: (paneId: PaneId) => dispatch({ type: "closePane", paneId }),
       splitPaneWithPayload: (
         paneId: PaneId,
@@ -335,8 +345,8 @@ export function useWorkspace({ ephemeral = false }: UseWorkspaceOptions = {}): U
     [dispatch, getReplayQueue],
   );
 
-  useWorkspaceHydrationEffects({ dispatch, projectsRef, toolsRef, skipRestore: ephemeral });
+  useWorkspaceHydrationEffects({ dispatch, toolsRef, skipRestore: ephemeral });
   useWorkspaceRuntimeSync({ dispatch, sessions: [...state.sessions.values()] });
 
-  return { state, dispatch, handles };
+  return { state, dispatch, handles, replayDebug: () => getReplayQueue().debugCounters() };
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { Children, isValidElement, memo, useCallback, useMemo, type ReactNode } from "react";
-import { useCopiedFlag } from "@/hooks/use-copied-flag";
+import { useCopiedFlag } from "@/features/agent/ui/use-copied-flag";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ExternalLink } from "@/ui/icon-registry";
@@ -83,13 +83,18 @@ const FencedCodeBlock = memo(function FencedCodeBlock({
   language: string | null;
 }) {
   const highlightedHtml = useMemo(() => highlightFenced(language, code), [code, language]);
-  const codeClassName = ["hljs", language ? `language-${language}` : "", "font-mono"]
+  const codeClassName = [
+    "syntax-highlight",
+    "hljs",
+    language ? `language-${language}` : "",
+    "font-mono",
+  ]
     .filter(Boolean)
     .join(" ");
 
   return (
-    <div className="assistant-code-block group my-3 overflow-hidden rounded-xl border border-(--border)/40 bg-[#181818]">
-      <div className="flex h-8 items-center justify-between border-b border-(--border)/30 bg-(--surface)/40 px-3">
+    <div className="assistant-code-block group my-3 overflow-hidden rounded-xl border border-(--border) bg-(--color-surface)">
+      <div className="flex h-8 items-center justify-between border-b border-(--border) px-3">
         <span className="font-mono text-[length:var(--fs-xs)] font-medium uppercase tracking-[0.1em] text-(--dim)">
           {language ?? "code"}
         </span>

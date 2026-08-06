@@ -1,4 +1,4 @@
-import type { Backend } from "@/lib/types";
+import type { Backend, ServeRuntime } from "@/lib/types";
 
 /**
  * Recipe shape used by the UI/editor. This intentionally supports top-level convenience fields
@@ -10,6 +10,7 @@ export interface RecipeEditor {
   name: string;
   model_path: string;
   backend?: Backend;
+  runtime?: ServeRuntime;
 
   // Server settings
   host?: string;
@@ -103,6 +104,7 @@ export interface RecipeEditor {
   fully_sharded_loras?: boolean;
 
   // Multimodal
+  vision?: boolean | null;
   image_input_type?: string;
   image_token_id?: number;
   image_input_shape?: string;

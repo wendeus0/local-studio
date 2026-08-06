@@ -7,11 +7,16 @@ import { useLogs } from "@/features/logs/use-logs";
 import { useRealtimeStatusStore } from "@/hooks/realtime-status-store";
 import type { RealtimeStatusSnapshot } from "@/hooks/realtime-status-types";
 import { getStoredBackendUrl } from "@/lib/api/connection";
+import { CensoredApiUrl } from "@/ui/api-url-censor";
 
 type Tab = "logs" | "docs";
 type BackendInfo = { installed: boolean; version: string | null };
 
 export default function ServerPage() {
+  return <ServerContent />;
+}
+
+export function ServerContent({ embedded = false }: { embedded?: boolean }) {
   const logs = useLogs();
   const realtime = useRealtimeStatusStore();
   const [tab, setTab] = useState<Tab>("logs");
@@ -21,9 +26,10 @@ export default function ServerPage() {
   );
   const docsSrcDoc = useMemo(() => swaggerSrcDoc("/api/proxy/api/spec"), []);
 
-  return (
-    <AppPage className="flex h-full min-h-0 flex-col overflow-hidden">
+  const content = (
+    <>
       <ServerHeader
+        embedded={embedded}
         backendUrl={backendUrl}
         connected={realtime.connected}
         running={Boolean(realtime.status?.running)}
@@ -55,11 +61,22 @@ export default function ServerPage() {
           docsSrcDoc={docsSrcDoc}
         />
       </div>
-    </AppPage>
+    </>
   );
+
+  if (embedded) {
+    return (
+      <div className="flex min-h-[44rem] flex-col overflow-hidden rounded-xl border border-(--ui-border) bg-(--ui-surface)">
+        {content}
+      </div>
+    );
+  }
+
+  return <AppPage className="flex h-full min-h-0 flex-col overflow-hidden">{content}</AppPage>;
 }
 
 function ServerHeader({
+  embedded,
   backendUrl,
   connected,
   running,
@@ -67,6 +84,7 @@ function ServerHeader({
   selectedSession,
   onRefresh,
 }: {
+  embedded: boolean;
   backendUrl: string;
   connected: boolean;
   running: boolean;
@@ -75,16 +93,26 @@ function ServerHeader({
   onRefresh: () => void;
 }) {
   return (
-    <header className="border-b border-(--border) px-5 py-4">
+    <header className={`border-b border-(--border) ${embedded ? "px-4 py-3" : "px-5 py-4"}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[length:var(--fs-xs)] uppercase tracking-[0.16em] text-(--color-foreground-subtle)">
-            Server
-          </div>
-          <h1 className="mt-1 text-[length:var(--fs-3xl)] font-semibold tracking-[-0.015em]">
-            Controller
-          </h1>
-          <p className="mt-1 font-mono text-xs text-(--color-foreground-subtle)">{backendUrl}</p>
+          {embedded ? (
+            <CensoredApiUrl className="block font-mono text-xs text-(--color-foreground-subtle)">
+              {backendUrl}
+            </CensoredApiUrl>
+          ) : (
+            <>
+              <div className="text-[length:var(--fs-xs)] uppercase tracking-[0.16em] text-(--color-foreground-subtle)">
+                Server
+              </div>
+              <h1 className="mt-1 text-[length:var(--fs-3xl)] font-semibold tracking-[-0.015em]">
+                Controller
+              </h1>
+              <CensoredApiUrl className="mt-1 block font-mono text-xs text-(--color-foreground-subtle)">
+                {backendUrl}
+              </CensoredApiUrl>
+            </>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <StatusPill tone={connected ? "good" : "danger"} variant="badge">
@@ -163,7 +191,10 @@ function ConnectionGroup({
 }) {
   return (
     <StatusGroup title="Connection">
-      <KeyValueRow label="URL" value={<span className="font-mono">{backendUrl}</span>} />
+      <KeyValueRow
+        label="URL"
+        value={<CensoredApiUrl className="font-mono">{backendUrl}</CensoredApiUrl>}
+      />
       <KeyValueRow label="Reachable" value={realtime.connected ? "yes" : "no"} />
       <KeyValueRow label="Inference port" value={realtime.status?.inference_port ?? "—"} />
       {realtime.lease?.holder ? <KeyValueRow label="Lease" value={realtime.lease.holder} /> : null}
@@ -290,7 +321,7 @@ function SessionList({
           className={`mb-1 block w-full truncate rounded px-2 py-1.5 text-left text-[length:var(--fs-sm)] ${
             selectedSession === session.id
               ? "bg-(--color-surface) text-(--fg)"
-              : "text-(--color-foreground-subtle) hover:bg-(--color-surface-hover) hover:text-(--fg)"
+              : "text-(--color-foreground-subtle) hover:bg-(--hover) hover:text-(--fg)"
           }`}
           title={session.id}
         >
@@ -413,8 +444,6 @@ function StatusGroup({ title, children }: { title: string; children: ReactNode }
     </div>
   );
 }
-
-// --- Pure helpers (keep JSX complexity low) ---
 
 function deriveBackends(
   summary: RealtimeStatusSnapshot["runtimeSummary"],

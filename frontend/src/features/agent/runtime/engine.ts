@@ -3,10 +3,12 @@ import { Effect } from "effect";
 import {
   finalizeRunningToolBlocks,
   mergeCanonicalAndRuntimeEvents,
+  reconcileReplayMessages,
   replayCursorAfterRuntimeHydration,
   runtimeStatusAcceptsControl,
 } from "@/features/agent/messages";
 import { foldSessionEvents } from "@/features/agent/runtime/pi-event-applier";
+import { settleTurnFinalizingTools } from "@/features/agent/runtime/session-status";
 import {
   selectedContextPrompt,
   type ComposerPromptTemplateRef,
@@ -26,6 +28,7 @@ import { sessionRuntimeController } from "@/features/agent/runtime/session-runti
 
 const EMPTY_SKILLS: ComposerSkillRef[] = [];
 const EMPTY_PROMPT_TEMPLATES: ComposerPromptTemplateRef[] = [];
+const inFlightReplays = new Set<SessionId>();
 
 export type UseSessionEngineDeps = {
   /** Latest `tabs` snapshot — engine reads via a ref so it doesn't restart on every frame. */
@@ -208,24 +211,17 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
           // and activeAssistantId would linger. Flush pending deltas first so the
           // last streamed text is committed before we finalize.
           sessionRuntimeController().flush(sessionId);
-          updateSession(sessionId, (s) => ({
-            ...s,
-            status: "idle",
-            activeAssistantId: undefined,
-            messages: s.messages.map((message) =>
-              message.role === "assistant" && message.blocks
-                ? { ...message, blocks: finalizeRunningToolBlocks(message.blocks) }
-                : message,
-            ),
-          }));
+          updateSession(sessionId, settleTurnFinalizingTools);
         }),
       ),
     [updateSession],
   );
 
   const loadAndReplay = useCallback(
-    (piSessionId: string, sessionId: SessionId) =>
-      Effect.runPromise(
+    (piSessionId: string, sessionId: SessionId) => {
+      if (inFlightReplays.has(sessionId)) return Promise.resolve();
+      inFlightReplays.add(sessionId);
+      return Effect.runPromise(
         Effect.gen(function* () {
           const cachedMessages = readTranscriptSnapshot(piSessionId);
           const seedCached = (session: Session) =>
@@ -278,9 +274,7 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
             const replaySeq = replayCursorAfterRuntimeHydration(runtimeStatus, piSessionId);
             updateSession(sessionId, (session) => ({
               ...session,
-              // Canonical wins when it has content; an empty replay keeps whatever we
-              // seeded from the cache so a transiently-empty log can't blank history.
-              messages: messages.length > 0 ? messages : session.messages,
+              messages: reconcileReplayMessages(session.messages, messages),
               piSessionId,
               cwd: session.cwd || cwd,
               // Head-scan meta carries the real session model/title; the fold's
@@ -329,8 +323,15 @@ export function useSessionEngine(deps: UseSessionEngineDeps): SessionEngine {
               status: "idle",
             }));
           }
-        }),
-      ),
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              inFlightReplays.delete(sessionId);
+            }),
+          ),
+        ),
+      );
+    },
     [cwd, modelId, updateSession],
   );
 

@@ -7,6 +7,7 @@ import { ModelLogo } from "@/ui/model-logo";
 import { ModelButton, ModelRow, ModelStatus, type ModelStatusTone } from "./model-page";
 import { modelIdFromPath } from "@/lib/huggingface";
 import { engineNodeStyle, formatBackendLabel } from "@/features/recipes/recipe-labels";
+import { visionModeOverrideLabel } from "@/features/recipes/recipe-vision";
 
 type Props = {
   recipe: RecipeWithStatus;
@@ -74,9 +75,13 @@ export const RecipeRow = memo(function RecipeRow({
   const description = `${modelName} · ${context}`;
   const engine = formatBackendLabel(recipe.backend);
   const engineStyle = engineNodeStyle(recipe.backend);
-  const launchTitle = launchDisabledReason ?? "Launch recipe";
+  const launchTitle = launchDisabledReason ?? "Launch Serve";
   const parallelism = `tp/pp ${tp}/${pp}`;
   const quant = recipe.quantization?.trim();
+  const runtime =
+    recipe.runtime?.label ??
+    (recipe.runtime ? `${recipe.runtime.kind}:${recipe.runtime.ref}` : "legacy runtime");
+  const inputMode = visionModeOverrideLabel(recipe);
 
   return (
     <ModelRow
@@ -97,6 +102,24 @@ export const RecipeRow = memo(function RecipeRow({
           >
             {parallelism}
           </span>
+          <span
+            title={
+              recipe.runtime
+                ? `Launch runtime: ${recipe.runtime.kind} · ${recipe.runtime.ref}`
+                : "Runtime will be migrated when this Serve is edited"
+            }
+            className="max-w-40 truncate rounded bg-(--surface-2) px-1.5 py-0.5 font-mono text-[length:var(--fs-2xs)] text-(--dim)"
+          >
+            {runtime}
+          </span>
+          {inputMode ? (
+            <span
+              title="Image input override"
+              className="shrink-0 rounded bg-(--surface-2) px-1.5 py-0.5 text-[length:var(--fs-2xs)] text-(--dim)"
+            >
+              {inputMode}
+            </span>
+          ) : null}
           {quant ? (
             <span
               title={`Quantization: weights compressed to ${quant} for lower memory use`}
@@ -124,7 +147,7 @@ export const RecipeRow = memo(function RecipeRow({
               <MoreVertical className="h-3 w-3" />
             </ModelButton>
             {isMenuOpen ? (
-              <div className="absolute right-0 z-50 mt-1 w-48 overflow-hidden rounded-md border border-(--color-card-border) bg-(--color-popover) shadow-lg">
+              <div className="absolute right-0 z-50 mt-1 w-48 overflow-hidden rounded-2xl border border-(--color-popover-border) bg-(--color-popover) shadow-[0px_16px_32px_-8px_rgba(0,0,0,0.3),0px_0px_0px_0.5px_rgba(0,0,0,0.1)]">
                 <button
                   onClick={handleTogglePin}
                   className="w-full px-3 py-2 text-left text-[length:var(--fs-md)] text-(--fg) hover:bg-(--color-menu-hover)"
@@ -146,9 +169,9 @@ export const RecipeRow = memo(function RecipeRow({
                 <button
                   onClick={handleRequestDelete}
                   title={`Open delete confirmation for ${recipe.name}`}
-                  className="w-full border-t border-(--color-card-border) px-3 py-2 text-left text-[length:var(--fs-md)] text-(--color-destructive) hover:bg-(--color-destructive)/10"
+                  className="w-full border-t border-(--color-popover-border) px-3 py-2 text-left text-[length:var(--fs-md)] text-(--color-destructive) hover:bg-(--color-destructive)/10"
                 >
-                  Delete recipe...
+                  Delete Serve…
                 </button>
               </div>
             ) : null}

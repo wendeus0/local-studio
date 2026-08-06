@@ -6,11 +6,49 @@ const integerSchema = Schema.Number.check(Schema.isInt());
 
 const nullableStringSchema = Schema.Union([Schema.Null, Schema.String]);
 
+const serveRuntimeSchema = Schema.Struct({
+  kind: Schema.Literals(["managed_venv", "system", "docker", "binary"]),
+  ref: Schema.String.check(Schema.isNonEmpty()),
+  label: Schema.optional(Schema.String),
+});
+
+const stringValue = (value: unknown): string | null =>
+  typeof value === "string" && value.trim() ? value.trim() : null;
+
+const defaultRuntime = (backend: unknown): Record<string, unknown> => {
+  const runtimeReference = stringValue(backend) ?? "vllm";
+  return runtimeReference === "llamacpp"
+    ? { kind: "binary", ref: "llama-server" }
+    : { kind: "managed_venv", ref: runtimeReference };
+};
+
+const normalizedRuntime = (
+  data: Record<string, unknown>,
+  extraArguments: Record<string, unknown>,
+): Record<string, unknown> => {
+  const runtime = data["runtime"];
+  if (runtime && typeof runtime === "object" && !Array.isArray(runtime)) {
+    const record = { ...(runtime as Record<string, unknown>) };
+    if (record["kind"] === "venv") record["kind"] = "managed_venv";
+    return record;
+  }
+  const dockerImage =
+    stringValue(extraArguments["docker_image"]) ?? stringValue(extraArguments["docker-image"]);
+  if (dockerImage) return { kind: "docker", ref: dockerImage };
+  const pythonPath = stringValue(data["python_path"]);
+  if (pythonPath) return { kind: "system", ref: pythonPath };
+  return defaultRuntime(data["backend"]);
+};
+
 // Defense-in-depth range checks: the editor floors these, but a recipe can also
 // arrive via the API / DB. A NaN previously failed schema validation and made
 // the whole recipe silently vanish; a negative/zero passed straight into the
 // engine launch command. Clamp to a valid value instead.
-const coercePositiveInt = (value: unknown, fallback: number, max = Number.MAX_SAFE_INTEGER): number => {
+const coercePositiveInt = (
+  value: unknown,
+  fallback: number,
+  max = Number.MAX_SAFE_INTEGER,
+): number => {
   if (value === undefined) return fallback;
   const parsed = Math.floor(Number(value));
   if (!Number.isFinite(parsed) || parsed < 1) return fallback;
@@ -41,17 +79,35 @@ export const normalizeRecipeInput = (raw: unknown): Record<string, unknown> => {
   }
   const data = { ...(raw as Record<string, unknown>) };
   const extraArguments = { ...((data["extra_args"] as Record<string, unknown> | undefined) ?? {}) };
+  const legacyVision = extraArguments["vision"];
+
+  if (
+    data["vision"] === undefined &&
+    (legacyVision === null || typeof legacyVision === "boolean")
+  ) {
+    data["vision"] = legacyVision;
+  }
+  delete extraArguments["vision"];
 
   if (data["backend"] === undefined && data["engine"] !== undefined) {
     data["backend"] = data["engine"];
     delete data["engine"];
   }
 
+  data["runtime"] = normalizedRuntime(data, extraArguments);
+  delete extraArguments["docker_image"];
+  delete extraArguments["docker-image"];
+
   if (data["tensor_parallel_size"] === undefined && data["tp"] !== undefined) {
     data["tensor_parallel_size"] = data["tp"];
   }
   if (data["pipeline_parallel_size"] === undefined && data["pp"] !== undefined) {
     data["pipeline_parallel_size"] = data["pp"];
+  }
+
+  for (const key of ["status", "crash_loop"]) {
+    delete data[key];
+    delete extraArguments[key];
   }
 
   const envCandidates = ["env_vars", "env-vars", "envVars"];
@@ -79,7 +135,9 @@ export const normalizeRecipeInput = (raw: unknown): Record<string, unknown> => {
     "id",
     "name",
     "model_path",
+    "vision",
     "backend",
+    "runtime",
     "env_vars",
     "tensor_parallel_size",
     "pipeline_parallel_size",
@@ -124,7 +182,9 @@ export const recipeSchema = Schema.Struct({
   id: Schema.String.check(Schema.isNonEmpty()),
   name: Schema.String,
   model_path: Schema.String,
+  vision: Schema.Union([Schema.Null, Schema.Boolean]),
   backend: Schema.Literals(["vllm", "sglang", "llamacpp", "mlx"]),
+  runtime: serveRuntimeSchema,
   env_vars: Schema.Union([Schema.Null, Schema.Record(Schema.String, Schema.String)]),
   tensor_parallel_size: integerSchema,
   pipeline_parallel_size: integerSchema,
@@ -162,6 +222,7 @@ export const parseRecipe = (raw: unknown): Recipe => {
     onExcessProperty: "preserve",
   })({
     ...normalized,
+    vision: normalized["vision"] ?? null,
     backend: normalized["backend"] ?? "vllm",
     env_vars: normalized["env_vars"] ?? null,
     tensor_parallel_size: coercePositiveInt(normalized["tensor_parallel_size"], 1),
@@ -195,6 +256,7 @@ export const parseRecipe = (raw: unknown): Recipe => {
   return {
     ...parsed,
     id: asRecipeId(parsed.id),
+    vision: parsed.vision ?? null,
     env_vars: environmentVariables,
     tool_call_parser: parsed.tool_call_parser ?? null,
     reasoning_parser: parsed.reasoning_parser ?? null,

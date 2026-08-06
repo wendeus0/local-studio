@@ -5,6 +5,8 @@ import type { AssistantBlock, ChatMessage } from "@/features/agent/messages";
 import { SessionPaneBlockRouter } from "@/features/agent/ui/timeline/session-pane-block-router";
 import { ChevronDownIcon } from "@/ui/icons";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import { effectTimeout, type EffectTimer } from "@/lib/effect-timers";
+import { patchSessionView, readSessionView } from "@/features/agent/workspace/session-view-state";
 
 // Mirrors `groupAssistantBlocks`: a message renders something only if it has a
 // non-empty text block or any tool/thinking/event block. Assistant messages
@@ -27,6 +29,8 @@ type TimelineProps = {
   emptyPrompt?: boolean;
   stickToBottom?: boolean;
   onStickToBottomChange?: (value: boolean) => void;
+  viewKey: string | null;
+  viewAlias: string | null;
   /** Older history remains unread beyond the loaded tail (shows "Load earlier"). */
   hasEarlier?: boolean;
   onLoadEarlier?: () => Promise<void> | void;
@@ -62,6 +66,8 @@ export function Timeline({
   emptyPrompt = false,
   stickToBottom = true,
   onStickToBottomChange,
+  viewKey,
+  viewAlias,
   hasEarlier = false,
   onLoadEarlier,
 }: TimelineProps) {
@@ -78,6 +84,8 @@ export function Timeline({
     bottom,
     stickToBottom,
     onStickToBottomChange,
+    viewKey,
+    viewAlias,
   });
 
   if (emptyPrompt) {
@@ -129,7 +137,7 @@ export function Timeline({
             })}
             {running && visibleMessages[visibleMessages.length - 1]?.role !== "assistant" ? (
               <div className="pt-6 pb-4">
-                <span className="codex-shimmer-text text-[13px] font-medium leading-5">
+                <span className="codex-shimmer-text text-[length:var(--fs-base)] font-normal leading-5">
                   Thinking
                 </span>
               </div>
@@ -181,7 +189,7 @@ function ScrollToBottomButton({ running, onClick }: { running: boolean; onClick:
     <button
       type="button"
       onClick={onClick}
-      className="absolute bottom-3 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-(--border) bg-(--surface) px-3 py-1 text-[length:var(--fs-xs)] text-(--fg)/85 shadow-[0_6px_20px_rgba(0,0,0,0.35)] backdrop-blur-sm transition-colors hover:text-(--fg)"
+      className="absolute bottom-3 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-(--border) bg-(--color-popover) px-3 py-1 text-[length:var(--fs-xs)] text-(--fg)/85 shadow-[0_6px_20px_rgba(0,0,0,0.35)] transition-colors hover:text-(--fg)"
       aria-label="Scroll to latest"
     >
       {running ? "New messages" : "Latest"}
@@ -237,19 +245,24 @@ function PromptMarkers({
   };
   return (
     <nav className="prompt-minimap" aria-label="Session prompts">
-      {visible.map((marker) => {
+      {visible.map((marker, index) => {
         const active = hoveredId === marker.id;
         return (
           <button
             key={marker.id}
             type="button"
             className="prompt-minimap-marker"
+            data-current={index === visible.length - 1 ? "true" : undefined}
             aria-label={`Scroll to prompt: ${marker.label}`}
             onMouseEnter={() => setHoveredId(marker.id)}
             onMouseLeave={() => setHoveredId((value) => (value === marker.id ? null : value))}
             onFocus={() => setHoveredId(marker.id)}
             onBlur={() => setHoveredId((value) => (value === marker.id ? null : value))}
-            onClick={() => scrollToPrompt(marker.id)}
+            onClick={(event) => {
+              scrollToPrompt(marker.id);
+              setHoveredId(null);
+              event.currentTarget.blur();
+            }}
           >
             <span className="prompt-minimap-line" />
             {active ? (
@@ -355,11 +368,15 @@ function useTimelineScrollEffects({
   bottom,
   stickToBottom,
   onStickToBottomChange,
+  viewKey,
+  viewAlias,
 }: {
   scroller: HTMLDivElement | null;
   bottom: HTMLDivElement | null;
   stickToBottom: boolean;
   onStickToBottomChange?: (value: boolean) => void;
+  viewKey: string | null;
+  viewAlias: string | null;
 }) {
   // Synchronous source of truth the handlers read. The parent's `stickToBottom`
   // prop is the eventually-consistent mirror (drives chrome and lets submit /
@@ -381,12 +398,33 @@ function useTimelineScrollEffects({
   useMountSubscription(() => {
     const el = scroller;
     if (!el) return;
+    const viewIdentity = viewKey ? { key: viewKey, aliases: viewAlias ? [viewAlias] : [] } : null;
+    const restored = viewIdentity ? readSessionView(window.localStorage, viewIdentity) : null;
+    let pendingRestoreTop = restored && !restored.stickToBottom ? restored.scrollTop : null;
+    let persistTimer: EffectTimer | null = null;
 
     const distanceFromBottom = () => el.scrollHeight - el.scrollTop - el.clientHeight;
     const atBottom = () => distanceFromBottom() <= AT_BOTTOM_THRESHOLD_PX;
 
     const pinToBottom = () => {
+      pendingRestoreTop = null;
       el.scrollTop = el.scrollHeight;
+    };
+    const restoreScrollTop = () => {
+      if (pendingRestoreTop === null) return;
+      const maximum = Math.max(0, el.scrollHeight - el.clientHeight);
+      el.scrollTop = Math.min(pendingRestoreTop, maximum);
+      if (maximum >= pendingRestoreTop) pendingRestoreTop = null;
+    };
+    const persist = () => {
+      if (!viewIdentity) return;
+      persistTimer?.cancel();
+      persistTimer = effectTimeout(() => {
+        patchSessionView(window.localStorage, viewIdentity, {
+          scrollTop: el.scrollTop,
+          stickToBottom: stickRef.current,
+        });
+      }, 120);
     };
     let pinFrame: number | null = null;
     const schedulePinToBottom = () => {
@@ -400,24 +438,33 @@ function useTimelineScrollEffects({
       if (stickRef.current === next) return;
       stickRef.current = next;
       onChangeRef.current?.(next);
+      persist();
     };
 
     const onScroll = () => {
+      if (pendingRestoreTop !== null) {
+        restoreScrollTop();
+        if (pendingRestoreTop !== null) return;
+      }
       if (atBottom()) {
         // Briefly respect a deliberate scroll-up near the bottom instead of
         // immediately re-locking and fighting the user.
         if (Date.now() < userHoldUntilRef.current) return;
         setStick(true);
+        persist();
         return;
       }
       setStick(false);
+      persist();
     };
 
     const holdAndDetach = () => {
+      pendingRestoreTop = null;
       userHoldUntilRef.current = Date.now() + USER_HOLD_MS;
       setStick(false);
     };
     const releaseHold = () => {
+      pendingRestoreTop = null;
       userHoldUntilRef.current = 0;
     };
 
@@ -457,7 +504,8 @@ function useTimelineScrollEffects({
       typeof ResizeObserver === "undefined"
         ? null
         : new ResizeObserver(() => {
-            schedulePinToBottom();
+            if (pendingRestoreTop !== null) restoreScrollTop();
+            else schedulePinToBottom();
           });
     resizeObserver?.observe(el);
     if (listEl !== el) resizeObserver?.observe(listEl);
@@ -469,13 +517,19 @@ function useTimelineScrollEffects({
       typeof MutationObserver === "undefined"
         ? null
         : new MutationObserver(() => {
-            schedulePinToBottom();
+            if (pendingRestoreTop !== null) restoreScrollTop();
+            else schedulePinToBottom();
           });
     mutationObserver?.observe(listEl, { childList: true, subtree: true });
 
     // Initial alignment (also covers async-loaded history once it renders, via
     // the ResizeObserver above).
+    if (restored) {
+      stickRef.current = restored.stickToBottom;
+      onChangeRef.current?.(restored.stickToBottom);
+    }
     if (stickRef.current) pinToBottom();
+    else restoreScrollTop();
 
     return () => {
       el.removeEventListener("scroll", onScroll);
@@ -486,8 +540,15 @@ function useTimelineScrollEffects({
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
       if (pinFrame !== null) window.cancelAnimationFrame(pinFrame);
+      persistTimer?.cancel();
+      if (viewIdentity) {
+        patchSessionView(window.localStorage, viewIdentity, {
+          scrollTop: el.scrollTop,
+          stickToBottom: stickRef.current,
+        });
+      }
     };
-  }, [bottom, scroller]);
+  }, [bottom, scroller, viewKey, viewAlias]);
 
   // When the parent forces stick=true (submit, tab change, session load), snap
   // back to the bottom and clear any lingering hold.

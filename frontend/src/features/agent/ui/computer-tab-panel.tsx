@@ -1,18 +1,19 @@
 "use client";
 
-import { Suspense, lazy, type ReactNode } from "react";
+import { Suspense, lazy, useCallback, type ReactNode } from "react";
 import {
   FolderTree,
   GitBranch,
   Globe2,
   ListChecks,
   MessageSquarePlus,
+  ScanSearch,
   TerminalSquare,
 } from "@/ui/icon-registry";
 import type { ToolsContextValue } from "@/features/agent/tools/context";
 import type { ComputerTab } from "@/features/agent/tools/types";
 import type { Project, GitSummary } from "@/features/agent/projects/types";
-import type { Session } from "@/features/agent/runtime/types";
+import type { Session, UpdateSession } from "@/features/agent/runtime/types";
 import type { AgentModel } from "@/features/agent/workspace/types";
 import { AgentModelPicker } from "@/features/agent/ui/agent-model-picker";
 import { ChatPane } from "@/features/agent/ui/chat-pane";
@@ -45,6 +46,11 @@ const LazyGitDiffPanel = lazy(() =>
 const LazyPlanPanel = lazy(() =>
   import("@/features/agent/ui/plan-panel").then(({ PlanPanel }) => ({
     default: PlanPanel,
+  })),
+);
+const LazyInspectorPanel = lazy(() =>
+  import("@/features/agent/ui/inspector-panel").then(({ InspectorPanel }) => ({
+    default: InspectorPanel,
   })),
 );
 
@@ -97,6 +103,7 @@ export function ComputerTabPanel(props: ComputerTabPanelProps) {
         }
       />
     ),
+    inspector: <LazyInspectorPanel session={props.focusedSession} />,
     terminal: null,
   };
   return <Suspense fallback={<ComputerTabFallback />}>{panels[props.tools.computer.tab]}</Suspense>;
@@ -143,6 +150,11 @@ function SideChatTab({
   const modelId = sideChatSession.modelId ?? focusedSession?.modelId ?? activeModelId;
   const selectedModel = models.find((model) => model.id === modelId) ?? activeModel;
   const cwd = sideChatSession.cwd ?? focusedSession?.cwd ?? activeProject?.path ?? "";
+  const updateSession = useCallback<UpdateSession>(
+    (sessionId, patch) =>
+      onUpdateSideChatTabs((tabs) => tabs.map((tab) => (tab.id === sessionId ? patch(tab) : tab))),
+    [onUpdateSideChatTabs],
+  );
   return (
     <section className="flex min-h-0 flex-1 flex-col">
       <ChatPane
@@ -174,7 +186,7 @@ function SideChatTab({
         onFocus={() => undefined}
         tabs={[sideChatSession]}
         activeTabId={sideChatSession.id}
-        onTabsChange={onUpdateSideChatTabs}
+        onUpdateSession={updateSession}
         onRenameSession={onRenameSideChat}
         onClose={onCloseSideChat}
         rightPanelOpen
@@ -260,6 +272,13 @@ function ComputerLauncherPanel({
       onClick: () => tools.setComputerTab("diff"),
     },
     {
+      key: "inspector",
+      title: "Inspector",
+      description: "Per-turn tools, files, and context",
+      icon: ScanSearch,
+      onClick: () => tools.setComputerTab("inspector"),
+    },
+    {
       key: "terminal",
       title: "Terminal",
       description: "Start an interactive shell",
@@ -281,7 +300,7 @@ function ComputerLauncherPanel({
               className={`group flex min-h-0 items-center gap-3 rounded-md px-3 py-2 text-left transition-colors ${
                 selected
                   ? "bg-(--color-surface-hover) text-(--fg)"
-                  : "text-(--fg)/75 hover:bg-(--color-surface-hover) hover:text-(--fg)"
+                  : "text-(--fg)/75 hover:bg-(--hover) hover:text-(--fg)"
               }`}
             >
               {Icon ? (

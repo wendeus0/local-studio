@@ -17,7 +17,13 @@ let applyingBounds = false;
 type PanelSize = { width: number; height: number };
 
 function threadWindowSize(): PanelSize {
-  return getStoredQuickPanelThreadSize() ?? DESKTOP_CONFIG.quickPanel.threadWindow;
+  const preferred = DESKTOP_CONFIG.quickPanel.threadWindow;
+  const stored = getStoredQuickPanelThreadSize();
+  if (!stored) return preferred;
+  return {
+    width: Math.max(stored.width, preferred.width),
+    height: Math.min(stored.height, preferred.height),
+  };
 }
 
 function currentModeSize(): PanelSize {
@@ -53,10 +59,10 @@ function anchoredBounds(window: BrowserWindow, size: PanelSize): Rectangle {
   };
 }
 
-function applyBounds(window: BrowserWindow, bounds: Rectangle): void {
+function applyBounds(window: BrowserWindow, bounds: Rectangle, animate = false): void {
   applyingBounds = true;
   try {
-    window.setBounds(bounds);
+    window.setBounds(bounds, animate && process.platform === "darwin");
   } finally {
     applyingBounds = false;
   }
@@ -148,10 +154,10 @@ export function resetQuickPanel(): void {
 
 export function resizeQuickPanelToThread(): void {
   if (!panel || panel.isDestroyed()) return;
-  applyBounds(panel, anchoredBounds(panel, threadWindowSize()));
-  panel.setResizable(true);
-  panel.setMinimumSize(QUICK_PANEL_MIN_THREAD_SIZE.width, QUICK_PANEL_MIN_THREAD_SIZE.height);
   isThreadMode = true;
+  panel.setMinimumSize(QUICK_PANEL_MIN_THREAD_SIZE.width, QUICK_PANEL_MIN_THREAD_SIZE.height);
+  panel.setResizable(true);
+  applyBounds(panel, anchoredBounds(panel, threadWindowSize()), true);
 }
 
 export function resizeQuickPanelToHome(): void {

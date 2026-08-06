@@ -6,12 +6,20 @@ import { pidExists } from "./process/process-utilities";
 import { isRecipeRunning } from "../models/recipes/recipe-matching";
 import type { ProcessInfo, Recipe } from "../models/types";
 import type { Config } from "../../config/env";
-import type { ProcessManager } from "./process/process-manager";
+import type { LaunchModelOptions, ProcessManager } from "./process/process-manager";
 import type { RecipeStore } from "../models/recipes/recipe-store";
 import { LIFECYCLE_READY_TIMEOUT_MS } from "./configs";
 import type { LaunchFailureBudget } from "./process/launch-failure-budget";
 import { formatLaunchFailureBudgetMessage } from "./process/launch-failure-budget";
 import { getEngineSpec } from "./engine-spec";
+import { Effect, Fiber } from "effect";
+import { resolveNvidiaSmiBinary } from "../system/platform/smi-tools";
+import {
+  GpuLeaseConflict,
+  type GpuLeaseRegistry,
+  resolveRecipeGpuUuids,
+} from "../system/gpu-leases";
+import type { GpuInfo } from "../models/types";
 
 export type SetActiveRecipeResult = { ok: true } | { ok: false; error: string };
 
@@ -26,12 +34,25 @@ interface CoordinatorDeps {
   processManager: ProcessManager;
   recipeStore: RecipeStore;
   launchFailureBudget: LaunchFailureBudget;
+  gpuLeaseRegistry: GpuLeaseRegistry;
+  gpuInfo: () => GpuInfo[];
+  processExists?: (pid: number) => boolean;
+  healthProbe?: (path: string) => Promise<boolean>;
+  livenessPollIntervalMs?: number;
+  requiresNvidiaGpuLeases?: () => boolean;
 }
+
+type RecipeGpuLeaseResult =
+  | { readonly ok: true; readonly launchOptions: LaunchModelOptions }
+  | { readonly ok: false; readonly error: string };
+
 export class EngineCoordinator {
   private readonly switchLock = new AsyncLock();
   private activeLifecycleAbort: AbortController | null = null;
   private activeLaunchPid: number | null = null;
   private lifecycleIntentSerial = 0;
+  private livenessFiber: Fiber.Fiber<void, never> | null = null;
+  private livenessSerial = 0;
   constructor(private readonly deps: CoordinatorDeps) {}
 
   async setActiveRecipe(
@@ -39,8 +60,8 @@ export class EngineCoordinator {
     options: SetActiveRecipeOptions = {},
   ): Promise<SetActiveRecipeResult> {
     const intentSerial = ++this.lifecycleIntentSerial;
+    this.activeLifecycleAbort?.abort();
     if (!recipe) {
-      this.activeLifecycleAbort?.abort();
       if (this.activeLaunchPid) {
         await this.deps.processManager.killProcess(this.activeLaunchPid, true);
       }
@@ -63,6 +84,7 @@ export class EngineCoordinator {
       if (spawnedPid) {
         await this.deps.processManager.killProcess(spawnedPid, true);
       }
+      if (spawnedPid) await this.releaseLlmGpuLeaseAfterStop(spawnedPid);
       await this.deps.eventManager.publishLaunchProgress(
         targetRecipe.id,
         "cancelled",
@@ -82,15 +104,21 @@ export class EngineCoordinator {
       if (recipe && intentSerial !== this.lifecycleIntentSerial) {
         return { ok: false, error: "Launch cancelled" };
       }
+      await this.stopLivenessMonitor();
       const current = await this.deps.processManager.findInferenceProcess(
         this.deps.config.inference_port,
       );
       const initialAbort = await abortIfNeeded(recipe);
       if (initialAbort) return initialAbort;
       if (!recipe && !current) {
-        return { ok: true };
+        return (await this.releaseLlmGpuLeaseAfterStop(null))
+          ? { ok: true }
+          : { ok: false, error: "Inference workers are still stopping" };
       }
       if (recipe && current && isRecipeRunning(recipe, current)) {
+        const lease = await this.prepareRecipeGpuLease(recipe);
+        if (!lease.ok) return lease;
+        this.startLivenessMonitor(current.pid);
         return { ok: true };
       }
       const killCurrent = async (process: ProcessInfo): Promise<boolean> => {
@@ -117,17 +145,25 @@ export class EngineCoordinator {
       if (current && (!recipe || !isRecipeRunning(recipe, current))) {
         const stopped = await killCurrent(current);
         if (!stopped) {
+          this.startLivenessMonitor(current.pid);
           return { ok: false, error: `Failed to stop process ${current.pid}` };
+        }
+        if (!(await this.releaseLlmGpuLeaseAfterStop(current.pid))) {
+          return { ok: false, error: "Inference workers are still stopping" };
         }
         await delay(500);
       }
       const postEvictAbort = await abortIfNeeded(recipe);
       if (postEvictAbort) return postEvictAbort;
       if (!recipe) {
+        await this.releaseLlmGpuLease();
         return { ok: true };
       }
+      const lease = await this.prepareRecipeGpuLease(recipe);
+      if (!lease.ok) return lease;
       const blocked = this.deps.launchFailureBudget.isBlocked(recipe.id);
       if (blocked) {
+        await this.releaseLlmGpuLease();
         const message = formatLaunchFailureBudgetMessage(blocked);
         await this.deps.eventManager.publishLaunchProgress(recipe.id, "error", message, 0);
         return { ok: false, error: message };
@@ -138,10 +174,16 @@ export class EngineCoordinator {
         `Starting ${recipe.name}...`,
         0.25,
       );
-      const launch = await this.deps.processManager.launchModel(recipe);
+      const launch = await this.deps.processManager
+        .launchModel(recipe, lease.launchOptions)
+        .catch(async (error) => {
+          await this.releaseLlmGpuLease();
+          throw error;
+        });
       spawnedPid = launch.pid;
       this.activeLaunchPid = launch.pid;
       if (!launch.success) {
+        await this.releaseLlmGpuLease();
         const failure = this.deps.launchFailureBudget.recordFailure(recipe.id);
         await this.deps.eventManager.publishLaunchProgress(
           recipe.id,
@@ -180,11 +222,13 @@ export class EngineCoordinator {
           "Model is ready!",
           1,
         );
+        if (launch.pid) this.startLivenessMonitor(launch.pid);
         return { ok: true };
       }
       if (launch.pid) {
         await this.deps.processManager.killProcess(launch.pid, true);
       }
+      await this.releaseLlmGpuLeaseAfterStop(launch.pid);
       const failure = this.deps.launchFailureBudget.recordFailure(recipe.id);
       await this.deps.eventManager.publishLaunchProgress(
         recipe.id,
@@ -205,6 +249,7 @@ export class EngineCoordinator {
     }
   }
   private probeHealth(path: string): Promise<boolean> {
+    if (this.deps.healthProbe) return this.deps.healthProbe(path);
     return fetchLocal(this.deps.config.inference_port, path, {
       host: this.deps.config.inference_host,
       timeoutMs: 5000,
@@ -245,7 +290,7 @@ export class EngineCoordinator {
       timeoutMs: options.timeoutMs ?? LIFECYCLE_READY_TIMEOUT_MS,
       failure: () => {
         if (options.cancel?.aborted) return "Launch cancelled";
-        if (options.pid && !pidExists(options.pid)) {
+        if (options.pid && !this.processExists(options.pid)) {
           const errorTail = options.logFilePath ? readFileTailBytes(options.logFilePath, 500) : "";
           return `Model ${options.recipe.id} crashed during startup: ${errorTail.slice(-200)}`;
         }
@@ -272,5 +317,99 @@ export class EngineCoordinator {
 
   async getCurrentProcess(): Promise<ProcessInfo | null> {
     return this.deps.processManager.findInferenceProcess(this.deps.config.inference_port);
+  }
+
+  async getCurrentRecipe(): Promise<Recipe | null> {
+    const process = await this.getCurrentProcess();
+    return process ? this.findRecipeForProcess(process) : null;
+  }
+
+  private async releaseLlmGpuLease(): Promise<void> {
+    await Effect.runPromise(this.deps.gpuLeaseRegistry.release("llm"));
+  }
+
+  private async prepareRecipeGpuLease(recipe: Recipe): Promise<RecipeGpuLeaseResult> {
+    const resolution = resolveRecipeGpuUuids(recipe, this.deps.gpuInfo());
+    if (resolution.unresolvedTokens.length > 0) {
+      return {
+        ok: false,
+        error: `Cannot resolve GPU selectors: ${resolution.unresolvedTokens.join(", ")}`,
+      };
+    }
+    if (
+      resolution.source === "all" &&
+      resolution.uuids.length === 0 &&
+      this.requiresNvidiaGpuLeases()
+    ) {
+      return { ok: false, error: "Cannot verify GPU isolation for an implicit all-GPU launch" };
+    }
+    const resolved = resolution.unresolvedTokens.length === 0;
+    const claimedUuids = resolved ? resolution.uuids : [];
+    const launchOptions: LaunchModelOptions =
+      resolved && (resolution.source === "recipe" || claimedUuids.length > 0)
+        ? { gpuUuids: claimedUuids }
+        : {};
+    try {
+      await Effect.runPromise(this.deps.gpuLeaseRegistry.replace("llm", claimedUuids));
+      return { ok: true, launchOptions };
+    } catch (error) {
+      return {
+        ok: false,
+        error:
+          error instanceof GpuLeaseConflict
+            ? "The selected model GPU is reserved by local speech"
+            : error instanceof Error
+              ? error.message
+              : String(error),
+      };
+    }
+  }
+
+  private async stopLivenessMonitor(): Promise<void> {
+    this.livenessSerial += 1;
+    const fiber = this.livenessFiber;
+    this.livenessFiber = null;
+    if (fiber) await Effect.runPromise(Fiber.interrupt(fiber));
+  }
+
+  private async confirmInferenceStopped(): Promise<boolean> {
+    return this.deps.processManager
+      .confirmInferenceStopped(this.deps.config.inference_port)
+      .catch(() => false);
+  }
+
+  private async releaseLlmGpuLeaseAfterStop(pid: number | null): Promise<boolean> {
+    if (!(await this.confirmInferenceStopped())) {
+      this.startLivenessMonitor(pid);
+      return false;
+    }
+    await this.releaseLlmGpuLease();
+    return true;
+  }
+
+  private startLivenessMonitor(pid: number | null): void {
+    const serial = ++this.livenessSerial;
+    const interval = this.deps.livenessPollIntervalMs ?? 1_000;
+    const coordinator = this;
+    const monitor = Effect.gen(function* () {
+      while (true) {
+        yield* Effect.sleep(interval);
+        if (pid && coordinator.processExists(pid)) continue;
+        if (yield* Effect.promise(() => coordinator.confirmInferenceStopped())) break;
+      }
+      if (serial !== coordinator.livenessSerial) return;
+      yield* coordinator.deps.gpuLeaseRegistry.release("llm");
+      if (serial === coordinator.livenessSerial) coordinator.livenessFiber = null;
+    }).pipe(Effect.catch(() => Effect.void));
+    this.livenessFiber = Effect.runFork(monitor);
+  }
+
+  private processExists(pid: number): boolean {
+    return (this.deps.processExists ?? pidExists)(pid);
+  }
+
+  private requiresNvidiaGpuLeases(): boolean {
+    if (this.deps.requiresNvidiaGpuLeases) return this.deps.requiresNvidiaGpuLeases();
+    return Boolean(resolveNvidiaSmiBinary() || process.env["LOCAL_STUDIO_SPEECH_GPU_UUID"]?.trim());
   }
 }

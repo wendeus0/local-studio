@@ -7,6 +7,13 @@ type PaneReplayHandle = {
   loadAndReplay: (piSessionId: string) => Promise<void> | void;
 };
 
+export type ReplayDrainCounters = {
+  eventsReceived: number;
+  eventsDropped: number;
+  drainStartedAtMs: number | null;
+  drainCompletedAtMs: number | null;
+};
+
 export type SessionReplayQueueDeps = {
   getHandle: (paneId: PaneId) => PaneReplayHandle | undefined;
   getState: () => {
@@ -14,13 +21,13 @@ export type SessionReplayQueueDeps = {
     sessions: SessionsMap;
   };
   setTimeout: (handler: () => void, delay: number) => void;
+  instrument?: boolean;
 };
 
 export type SessionReplayQueue = {
-  /** Queue (last-wins per pane) a canonical-session replay for a pane. */
   queue: (paneId: PaneId, piSessionId: string) => void;
-  /** A pane handle mounted — drain any replay queued before it existed. */
   notifyHandleRegistered: (paneId: PaneId) => void;
+  debugCounters: () => Readonly<Record<PaneId, Readonly<ReplayDrainCounters>>>;
 };
 
 // The replay drop guard is deliberately NARROWER than isEmptyStarterSession:
@@ -40,35 +47,66 @@ function isFreshStarter(session: Session | undefined): boolean {
 
 export function createSessionReplayQueue(deps: SessionReplayQueueDeps): SessionReplayQueue {
   const pending = new Map<PaneId, string>();
+  const counters = deps.instrument ? new Map<PaneId, ReplayDrainCounters>() : null;
+
+  const ensureCounters = (paneId: PaneId): ReplayDrainCounters | undefined => {
+    if (!counters) return undefined;
+    let c = counters.get(paneId);
+    if (!c) {
+      c = { eventsReceived: 0, eventsDropped: 0, drainStartedAtMs: null, drainCompletedAtMs: null };
+      counters.set(paneId, c);
+    }
+    return c;
+  };
 
   const drain = (paneId: PaneId) => {
     const pendingSessionId = pending.get(paneId);
     if (!pendingSessionId) return;
+    const c = ensureCounters(paneId);
+    if (c) c.drainStartedAtMs = Date.now();
     const handle = deps.getHandle(paneId);
     if (!handle) return;
     const sessionId = paneSessionId(deps.getState().panesById.get(paneId));
     const current = sessionId ? deps.getState().sessions.get(sessionId) : undefined;
-    if (!current || isFreshStarter(current)) {
+    if (!current || isFreshStarter(current) || current.messages.length > 0) {
       pending.delete(paneId);
+      if (c) {
+        c.eventsDropped++;
+        c.drainCompletedAtMs = Date.now();
+      }
       return;
     }
     if (current.piSessionId && current.piSessionId !== pendingSessionId) {
       pending.delete(paneId);
+      if (c) {
+        c.eventsDropped++;
+        c.drainCompletedAtMs = Date.now();
+      }
       return;
     }
     if (handle.sessionId !== current.id) return;
     pending.delete(paneId);
+    if (c) c.drainCompletedAtMs = Date.now();
     void handle.loadAndReplay(pendingSessionId);
   };
 
   return {
     queue: (paneId, piSessionId) => {
       pending.set(paneId, piSessionId);
-      // Defer past the dispatch/render that created the pane.
+      if (counters) {
+        const c = ensureCounters(paneId);
+        if (c) c.eventsReceived++;
+      }
       deps.setTimeout(() => drain(paneId), 0);
     },
     notifyHandleRegistered: (paneId) => {
-      if (pending.has(paneId)) deps.setTimeout(() => drain(paneId), 0);
+      if (pending.has(paneId)) drain(paneId);
+    },
+    debugCounters: () => {
+      if (!counters) return {};
+      const snapshot: Record<PaneId, ReplayDrainCounters> = {};
+      for (const [k, v] of counters) snapshot[k] = { ...v };
+      return snapshot;
     },
   };
 }

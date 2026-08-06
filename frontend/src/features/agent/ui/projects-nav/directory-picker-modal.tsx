@@ -70,7 +70,7 @@ export function ProjectDirectoryPickerModal({
             onKeyDown={(event) => {
               if (event.key === "Enter") goToDraftPath();
             }}
-            className="min-w-0 flex-1 rounded border border-(--border) bg-(--bg) px-3 py-2 font-mono text-xs text-(--fg) outline-none focus:border-(--accent)"
+            className="min-w-0 flex-1 rounded border border-(--color-popover-border) bg-(--color-input) px-3 py-2 font-mono text-xs text-(--fg) outline-none focus:border-(--accent)"
             placeholder="/Users/name/project"
             aria-label="Directory path"
           />
@@ -103,7 +103,7 @@ export function ProjectDirectoryPickerModal({
             {currentPath || "Loading..."}
           </span>
         </div>
-        <div className="h-72 overflow-auto rounded-lg border border-(--border) bg-(--bg)">
+        <div className="h-72 overflow-auto rounded-lg border border-(--color-popover-border) bg-(--color-background)">
           {loading ? (
             <div className="px-3 py-8 text-center text-xs text-(--dim)">Loading folders...</div>
           ) : entries.length === 0 ? (
@@ -114,7 +114,7 @@ export function ProjectDirectoryPickerModal({
                 key={entry.path}
                 type="button"
                 onClick={() => void loadDirectory(entry.path)}
-                className="flex w-full items-center gap-2 border-b border-(--border)/50 px-3 py-2 text-left hover:bg-(--surface)"
+                className="flex w-full items-center gap-2 border-b border-(--separator) px-3 py-2 text-left hover:bg-(--hover)"
                 title={entry.path}
               >
                 <Folder className="h-4 w-4 shrink-0 text-(--dim)" />
@@ -124,7 +124,7 @@ export function ProjectDirectoryPickerModal({
           )}
         </div>
         {(browseError || error) && <ErrorBox>{browseError || error}</ErrorBox>}
-        <div className="flex justify-end gap-2 border-t border-(--border) pt-4">
+        <div className="flex justify-end gap-2 border-t border-(--color-popover-border) pt-4">
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>

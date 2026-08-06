@@ -15,19 +15,21 @@ export function SegmentedControl<T extends string = string>({
   value,
   onChange,
   size = "md",
+  disabled = false,
   className,
 }: {
   items: SegmentedItem<T>[];
   value: T;
   onChange: (id: T) => void;
   size?: "sm" | "md";
+  disabled?: boolean;
   className?: string;
 }) {
   return (
     <div
       role="tablist"
       className={cx(
-        "inline-flex items-center gap-0.5 rounded-lg border border-(--ui-border) bg-(--ui-bg) p-0.5",
+        "inline-flex items-center gap-0.5 rounded-full border border-(--ui-border) bg-(--surface-3) p-0.5",
         className,
       )}
     >
@@ -39,9 +41,10 @@ export function SegmentedControl<T extends string = string>({
             type="button"
             role="tab"
             aria-selected={active}
+            disabled={disabled}
             onClick={() => onChange(item.id)}
             className={cx(
-              "inline-flex items-center gap-1.5 rounded-md transition-colors",
+              "inline-flex items-center gap-1.5 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50",
               size === "sm"
                 ? "px-2 py-0.5 text-[length:var(--fs-sm)]"
                 : "px-2.5 py-1 text-[length:var(--fs-md)]",

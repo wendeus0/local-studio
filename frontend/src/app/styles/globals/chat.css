@@ -57,8 +57,7 @@
   font-size: var(--codex-chat-font-size);
   line-height: var(--codex-chat-line-height);
   font-weight: var(--codex-chat-font-weight);
-  /* Codex renders message body at foreground 85% */
-  color: color-mix(in srgb, var(--fg) 85%, transparent);
+  color: color-mix(in srgb, var(--fg) 80%, transparent);
   letter-spacing: 0;
 }
 
@@ -122,7 +121,7 @@
 .chat-markdown h3,
 .chat-markdown h4 {
   font-weight: 600;
-  color: var(--fg);
+  color: color-mix(in srgb, var(--fg) 90%, transparent);
   line-height: 1.3;
   letter-spacing: -0.01em;
 }
@@ -166,12 +165,9 @@
 
 .chat-markdown strong {
   font-weight: 600;
-  color: color-mix(in srgb, var(--fg) 94%, transparent);
+  color: color-mix(in srgb, var(--fg) 88%, transparent);
 }
 
-/* Reference chips — file paths and external links render as compact, themed
-   chips with a leading icon so they read as actionable inside prose. Scoped
-   with two classes so they outrank the bare `.chat-markdown a` reset. */
 .chat-markdown a {
   color: var(--link, #6ea8fe);
   text-decoration: none;
@@ -183,22 +179,23 @@
   gap: 0.28em;
   max-width: 100%;
   vertical-align: baseline;
-  margin: 0 1px;
-  padding: 0.5px 6px 0.5px 5px;
-  border-radius: 6px;
-  font-family:
-    var(--codex-chat-mono-font-family), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 17px;
-  font-weight: 450;
+  margin: 0;
+  padding: 0 2px;
+  border-radius: 4px;
+  font-size: inherit;
+  line-height: inherit;
+  font-weight: 500;
   color: var(--link, #6ea8fe);
-  background: color-mix(in srgb, var(--link, #6ea8fe) 11%, transparent);
-  border: 1px solid color-mix(in srgb, var(--link, #6ea8fe) 22%, transparent);
+  background: transparent;
   text-decoration: none;
   cursor: pointer;
-  transition:
-    background 0.13s ease,
-    border-color 0.13s ease;
+  transition: background 0.13s ease;
+}
+
+.chat-markdown .chat-ref-path {
+  font-family: var(--codex-chat-mono-font-family);
+  font-size: var(--codex-chat-code-font-size);
+  line-height: 17px;
 }
 
 .chat-markdown .chat-ref-chip[role="group"] {
@@ -228,12 +225,11 @@
 
 .chat-markdown .chat-ref-chip-copy:hover {
   opacity: 1;
-  background: color-mix(in srgb, var(--link, #6ea8fe) 16%, transparent);
+  background: var(--color-hover);
 }
 
 .chat-markdown .chat-ref-chip:hover {
-  background: color-mix(in srgb, var(--link, #6ea8fe) 18%, transparent);
-  border-color: color-mix(in srgb, var(--link, #6ea8fe) 36%, transparent);
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
 }
 
 .chat-markdown .chat-ref-chip-icon {
@@ -269,7 +265,7 @@
 
 .chat-markdown thead th {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--separator);
 }
 
 .chat-markdown th {
@@ -288,7 +284,7 @@
   color: color-mix(in srgb, var(--fg) 84%, transparent);
   vertical-align: top;
   overflow-wrap: anywhere;
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-top: 1px solid var(--separator);
 }
 
 .chat-markdown tbody tr:first-child td {
@@ -366,7 +362,7 @@
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
-  gap: 10px;
+  gap: 7px;
   max-height: 60vh;
   width: 4.75rem;
   pointer-events: none;
@@ -384,7 +380,7 @@
   display: flex;
   align-items: center;
   width: 3rem;
-  height: 1rem;
+  height: 0.72rem;
   padding: 0;
   border: 0;
   background: transparent;
@@ -395,19 +391,24 @@
 
 .prompt-minimap-line {
   display: block;
-  width: 0.82rem;
-  height: 2px;
+  width: 0.6rem;
+  height: 3px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--fg) 26%, transparent);
+  background: color-mix(in srgb, var(--fg) 20%, transparent);
   transition:
     width 0.14s ease,
     background-color 0.14s ease,
     box-shadow 0.14s ease;
 }
 
+.prompt-minimap-marker[data-current="true"] .prompt-minimap-line {
+  width: 0.72rem;
+  background: color-mix(in srgb, var(--fg) 82%, transparent);
+}
+
 .prompt-minimap-marker:hover .prompt-minimap-line,
 .prompt-minimap-marker:focus-visible .prompt-minimap-line {
-  width: 2rem;
+  width: 1.6rem;
   background: color-mix(in srgb, var(--fg) 88%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--agent-bg) 72%, transparent);
 }
@@ -417,9 +418,9 @@
   left: 2.55rem;
   top: 50%;
   display: grid;
-  width: min(26rem, calc(100vw - 8rem));
-  gap: 0.28rem;
-  padding: 0.65rem 0.75rem;
+  width: min(32rem, calc(100cqw - 8rem));
+  gap: 0.4rem;
+  padding: 0.8rem 0.9rem;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: 0.72rem;
   background: color-mix(in srgb, var(--surface) 94%, var(--agent-bg));
@@ -434,7 +435,7 @@
   overflow: hidden;
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 4;
   font-size: 13px;
   line-height: 1.45;
   color: color-mix(in srgb, var(--fg) 90%, transparent);
@@ -497,60 +498,60 @@
   word-break: normal;
 }
 
-.chat-markdown .assistant-code-block .hljs {
+.syntax-highlight {
   background: transparent;
-  color: #fff;
+  color: var(--fg);
 }
 
-.chat-markdown .assistant-code-block .hljs-keyword,
-.chat-markdown .assistant-code-block .hljs-selector-tag,
-.chat-markdown .assistant-code-block .hljs-literal,
-.chat-markdown .assistant-code-block .hljs-section,
-.chat-markdown .assistant-code-block .hljs-link {
-  color: #2e95d3;
+.syntax-highlight .hljs-keyword,
+.syntax-highlight .hljs-selector-tag,
+.syntax-highlight .hljs-literal,
+.syntax-highlight .hljs-section,
+.syntax-highlight .hljs-link {
+  color: var(--color-syntax-keyword);
 }
 
-.chat-markdown .assistant-code-block .hljs-string,
-.chat-markdown .assistant-code-block .hljs-name,
-.chat-markdown .assistant-code-block .hljs-type,
-.chat-markdown .assistant-code-block .hljs-symbol,
-.chat-markdown .assistant-code-block .hljs-bullet,
-.chat-markdown .assistant-code-block .hljs-addition {
-  color: #00a67d;
+.syntax-highlight .hljs-string,
+.syntax-highlight .hljs-name,
+.syntax-highlight .hljs-type,
+.syntax-highlight .hljs-symbol,
+.syntax-highlight .hljs-bullet,
+.syntax-highlight .hljs-addition {
+  color: var(--color-syntax-string);
 }
 
-.chat-markdown .assistant-code-block .hljs-title {
-  color: #f22c3d;
+.syntax-highlight .hljs-title {
+  color: var(--color-syntax-title);
 }
 
-.chat-markdown .assistant-code-block .hljs-attr,
-.chat-markdown .assistant-code-block .hljs-attribute,
-.chat-markdown .assistant-code-block .hljs-variable,
-.chat-markdown .assistant-code-block .hljs-template-variable,
-.chat-markdown .assistant-code-block .hljs-selector-class,
-.chat-markdown .assistant-code-block .hljs-selector-attr,
-.chat-markdown .assistant-code-block .hljs-selector-pseudo,
-.chat-markdown .assistant-code-block .hljs-number,
-.chat-markdown .assistant-code-block .hljs-built_in,
-.chat-markdown .assistant-code-block .hljs-builtin-name {
-  color: #df3079;
+.syntax-highlight .hljs-attr,
+.syntax-highlight .hljs-attribute,
+.syntax-highlight .hljs-variable,
+.syntax-highlight .hljs-template-variable,
+.syntax-highlight .hljs-selector-class,
+.syntax-highlight .hljs-selector-attr,
+.syntax-highlight .hljs-selector-pseudo,
+.syntax-highlight .hljs-number,
+.syntax-highlight .hljs-built_in,
+.syntax-highlight .hljs-builtin-name {
+  color: var(--color-syntax-value);
 }
 
-.chat-markdown .assistant-code-block .hljs-comment,
-.chat-markdown .assistant-code-block .hljs-quote,
-.chat-markdown .assistant-code-block .hljs-meta {
-  color: #ffffff80;
+.syntax-highlight .hljs-comment,
+.syntax-highlight .hljs-quote,
+.syntax-highlight .hljs-meta {
+  color: var(--color-syntax-comment);
 }
 
-.chat-markdown .assistant-code-block .hljs-deletion {
-  color: #ff7373;
+.syntax-highlight .hljs-deletion {
+  color: var(--color-syntax-deletion);
 }
 
-.chat-markdown .assistant-code-block .hljs-emphasis {
+.syntax-highlight .hljs-emphasis {
   font-style: italic;
 }
 
-.chat-markdown .assistant-code-block .hljs-strong {
+.syntax-highlight .hljs-strong {
   font-weight: 600;
 }
 

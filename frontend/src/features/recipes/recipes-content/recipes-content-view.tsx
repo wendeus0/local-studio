@@ -2,9 +2,9 @@
 
 import type { ReactNode } from "react";
 import { Compass, Download, HardDrive } from "@/ui/icon-registry";
-import type { ModelInfo, RecipeWithStatus } from "@/lib/types";
+import type { ModelDownload, ModelInfo, RecipeWithStatus, RuntimeTarget } from "@/lib/types";
 import type { RecipeEditor } from "@/features/recipes/recipe-editor";
-import { SettingsLayout } from "@/features/settings/settings-ui";
+import { RefreshButton, TabbedPage, Tabs } from "@/ui";
 import type { RecipesContentTab } from "./recipes-content-model";
 import type { RecipesTableProps } from "./types";
 import { DeleteRecipeConfirmModal } from "./delete-recipe-confirm-modal";
@@ -14,6 +14,7 @@ import { ExploreTab } from "./explore-tab";
 import { DownloadsTab } from "./downloads-tab";
 
 type Props = {
+  embedded?: boolean;
   tab: RecipesContentTab;
   setTab: (tab: RecipesContentTab) => void;
   loading: boolean;
@@ -31,9 +32,11 @@ type Props = {
   runningRecipeName: string | null;
   launchProgressMessage: string | null;
   availableModels: ModelInfo[];
+  runtimeTargets: RuntimeTarget[];
   sortedRecipes: RecipeWithStatus[];
   onRefresh: () => void;
   onNewRecipe: () => void;
+  onCreateServeFromDownload: (download: ModelDownload) => void;
   onSaveRecipe: () => void;
   onCloseRecipeModal: () => void;
   onCancelDelete: () => void;
@@ -42,34 +45,30 @@ type Props = {
   table: RecipesTableProps;
 };
 
-const MODEL_SECTIONS: Array<{
-  id: RecipesContentTab;
-  label: string;
-  description: string;
-  icon: ReactNode;
-}> = [
-  {
-    id: "explore",
-    label: "Search Models",
-    description: "Base model search first; derivatives expand under the selected family.",
-    icon: <Compass className="h-3.5 w-3.5" />,
-  },
-  {
-    id: "recipes",
-    label: "Current Running Models",
-    description: "Local launch recipes, running state, and engine actions.",
-    icon: <HardDrive className="h-3.5 w-3.5" />,
-  },
-  {
-    id: "downloads",
-    label: "Downloads",
-    description: "Download queue, progress, retry, and cancel controls.",
-    icon: <Download className="h-3.5 w-3.5" />,
-  },
+const MODEL_TABS: Array<{ id: RecipesContentTab; label: string; icon: ReactNode }> = [
+  { id: "get", label: "Get", icon: <Compass className="h-3.5 w-3.5" /> },
+  { id: "serves", label: "Serves", icon: <HardDrive className="h-3.5 w-3.5" /> },
+  { id: "downloads", label: "Downloads", icon: <Download className="h-3.5 w-3.5" /> },
 ];
+
+const TAB_HEADINGS: Record<RecipesContentTab, { title: string; description: string }> = {
+  get: {
+    title: "Get",
+    description: "Find the right model, check hardware fit, and download its weights.",
+  },
+  serves: {
+    title: "Serves",
+    description: "Saved model, runtime, and configuration combinations ready to launch.",
+  },
+  downloads: {
+    title: "Downloads",
+    description: "Download queue, progress, retry, and cancel controls.",
+  },
+};
 
 export function RecipesContentView(props: Props) {
   const {
+    embedded = false,
     tab,
     setTab,
     loading,
@@ -87,9 +86,11 @@ export function RecipesContentView(props: Props) {
     runningRecipeName,
     launchProgressMessage,
     availableModels,
+    runtimeTargets,
     sortedRecipes,
     onRefresh,
     onNewRecipe,
+    onCreateServeFromDownload,
     onSaveRecipe,
     onCloseRecipeModal,
     onCancelDelete,
@@ -97,27 +98,15 @@ export function RecipesContentView(props: Props) {
     onEvictModel,
     table,
   } = props;
-  const status = loading
-    ? "syncing recipes"
-    : recipes.length
-      ? `${recipes.length} configured`
-      : "stable defaults";
-  const statusText = refreshing ? "refreshing" : status;
-
-  return (
-    <>
-      <SettingsLayout
-        sections={MODEL_SECTIONS}
-        activeSection={tab}
-        title="Models"
-        eyebrow="Model library"
-        status={statusText}
-        loading={refreshing || loading}
-        onReload={onRefresh}
-        onSelectSection={setTab}
-        refreshLabel="Refresh models"
-      >
-        {tab === "recipes" ? (
+  const heading = TAB_HEADINGS[tab];
+  const content = (
+    <section>
+      <h2 className="text-[length:var(--fs-2xl)] font-medium tracking-[-0.015em] text-(--ui-fg)">
+        {heading.title}
+      </h2>
+      <p className="mt-1 text-[length:var(--fs-sm)] text-(--ui-muted)">{heading.description}</p>
+      <div className="mt-6">
+        {tab === "serves" ? (
           <RecipesTab
             loading={loading}
             filter={filter}
@@ -131,19 +120,58 @@ export function RecipesContentView(props: Props) {
             onNewRecipe={onNewRecipe}
             table={table}
           />
-        ) : tab === "explore" ? (
+        ) : tab === "get" ? (
           <ExploreTab />
         ) : (
-          <DownloadsTab />
+          <DownloadsTab onCreateServe={onCreateServeFromDownload} />
         )}
-      </SettingsLayout>
+      </div>
+    </section>
+  );
+
+  return (
+    <>
+      {embedded ? (
+        <div className="space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-(--ui-separator) pb-3">
+            <Tabs variant="pill" items={MODEL_TABS} activeTab={tab} onSelectTab={setTab} />
+            <RefreshButton
+              onRefresh={onRefresh}
+              loading={refreshing || loading}
+              label="Refresh models"
+              className="h-8 w-8"
+            />
+          </div>
+          {content}
+        </div>
+      ) : (
+        <TabbedPage
+          eyebrow="Model library"
+          title="Models"
+          description="Manage model profiles, downloads, and the model marketplace available to Local Studio."
+          width="md"
+          tabs={MODEL_TABS}
+          activeTab={tab}
+          onSelectTab={setTab}
+          actions={
+            <RefreshButton
+              onRefresh={onRefresh}
+              loading={refreshing || loading}
+              label="Refresh models"
+              className="h-8 w-8"
+            />
+          }
+        >
+          {content}
+        </TabbedPage>
+      )}
 
       {modalOpen && modalRecipe ? (
         <div className="fixed inset-0 z-50 flex justify-end">
           <button
             type="button"
             aria-label="Close recipe editor"
-            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            className="absolute inset-0 bg-(--color-background)"
             onClick={onCloseRecipeModal}
           />
           <RecipeModal
@@ -153,6 +181,7 @@ export function RecipesContentView(props: Props) {
             onChange={setModalRecipe}
             saving={saving}
             availableModels={availableModels}
+            runtimeTargets={runtimeTargets}
             recipes={recipes}
           />
         </div>

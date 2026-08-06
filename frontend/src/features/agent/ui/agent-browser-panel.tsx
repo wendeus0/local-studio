@@ -11,6 +11,7 @@ import {
   MessageSquarePlus,
   PanelRight,
   Plus,
+  ScanSearch,
   TerminalSquare,
   type LucideIcon,
 } from "@/ui/icon-registry";
@@ -35,9 +36,8 @@ import type { Session } from "@/features/agent/runtime/types";
 import { makeFreshTab } from "@/features/agent/messages/helpers";
 import type { AgentModel } from "@/features/agent/workspace/types";
 import {
-  isTerminalOwnerVisible,
+  terminalOwnerFor,
   terminalOwnerLabel,
-  uniqueTerminalKeys,
   type TerminalOwner,
 } from "@/features/agent/terminal-owners";
 import {
@@ -50,7 +50,11 @@ import type { WorkspaceHandles } from "@/features/agent/ui/use-workspace";
 
 type AgentBrowserPanelHandles = Pick<
   WorkspaceHandles,
-  "registerComputerAside" | "startComputerResize" | "compactFocusedSession" | "openTerminalPane"
+  | "registerComputerAside"
+  | "startComputerResize"
+  | "compactFocusedSession"
+  | "updateDetachedSession"
+  | "removeDetachedSession"
 >;
 
 type AgentBrowserPanelProps = {
@@ -77,37 +81,6 @@ function createSideChatSession(
     cwd: focusedSession?.cwd ?? activeProject?.path,
     projectId: focusedSession?.projectId ?? activeProject?.id,
     modelId: focusedSession?.modelId ?? activeModelId,
-  };
-}
-
-function terminalOwnerFor(
-  activeProject: Project | null,
-  focusedSession: Session | null,
-): TerminalOwner | null {
-  if (focusedSession) {
-    const sessionKey = `session:${focusedSession.id}`;
-    const piKey = focusedSession.piSessionId ? `pi:${focusedSession.piSessionId}` : null;
-    const title = focusedSession.title?.trim() || activeProject?.name || "Session terminal";
-    return {
-      mountKey: sessionKey,
-      matchKeys: uniqueTerminalKeys([sessionKey, piKey ?? ""]),
-      cwd: focusedSession.cwd ?? activeProject?.path ?? null,
-      title,
-      kind: "session",
-      sessionId: focusedSession.id,
-      piSessionId: focusedSession.piSessionId ?? null,
-      projectId: focusedSession.projectId ?? activeProject?.id ?? null,
-    };
-  }
-  if (!activeProject) return null;
-  const projectKey = `project:${activeProject.id}`;
-  return {
-    mountKey: projectKey,
-    matchKeys: [projectKey],
-    cwd: activeProject.path,
-    title: activeProject.name || "Project terminal",
-    kind: "project",
-    projectId: activeProject.id,
   };
 }
 
@@ -146,32 +119,28 @@ export function AgentBrowserPanel({
   gitSummary,
 }: AgentBrowserPanelProps) {
   const tools = useTools();
-  const [sideChatSession, setSideChatSession] = useState<Session>(() =>
+  const [sideChatSeed, setSideChatSeed] = useState<Session>(() =>
     createSideChatSession(null, null, ""),
   );
+  const sideChatSession =
+    sessions.find((session) => session.id === sideChatSeed.id) ?? sideChatSeed;
   const { registerComputerAside, startComputerResize } = handles;
   const isElectron = typeof navigator !== "undefined" && /electron/i.test(navigator.userAgent);
   const terminalOwner = useMemo(
     () => terminalOwnerFor(activeProject, focusedSession),
     [activeProject, focusedSession],
   );
-  const isOwnerVisible = useCallback(
-    (owner: TerminalOwner) =>
-      isTerminalOwnerVisible(owner, focusedSession, activeProject?.id ?? null),
-    [activeProject, focusedSession],
-  );
   const terminalState = usePersistentTerminalOwners(
     tools.computer.open && tools.computer.tab === "terminal",
     terminalOwner,
-    isOwnerVisible,
   );
   const visibleTerminalState = useMemo<TerminalOwnersSnapshot>(() => {
-    const owners = terminalState.owners.filter(isOwnerVisible);
+    const owners = terminalState.owners;
     const activeOwnerKey = owners.some((owner) => owner.mountKey === terminalState.activeOwnerKey)
       ? terminalState.activeOwnerKey
       : (owners[0]?.mountKey ?? null);
     return { owners, activeOwnerKey };
-  }, [isOwnerVisible, terminalState]);
+  }, [terminalState]);
   const openTerminalForFocusedSession = useCallback(() => {
     if (terminalOwner) rememberPersistentTerminalOwner(terminalOwner, { select: true });
     tools.setComputerTab("terminal");
@@ -219,15 +188,17 @@ export function AgentBrowserPanel({
     (draft?: SideChatDraft) => {
       if (draft) {
         const next = createSideChatSession(activeProject ?? null, focusedSession, activeModelId);
-        setSideChatSession({
+        const drafted = {
           ...next,
           title: draft.title.trim().slice(0, 80) || "Plan task",
           input: draft.input,
-        });
+        };
+        setSideChatSeed(drafted);
+        handles.updateDetachedSession(drafted, () => drafted);
         tools.setComputerTab("side-chat");
         return;
       }
-      setSideChatSession((current) =>
+      handles.updateDetachedSession(sideChatSeed, (current) =>
         current.messages.length
           ? current
           : {
@@ -240,22 +211,33 @@ export function AgentBrowserPanel({
       );
       tools.setComputerTab("side-chat");
     },
-    [activeModelId, activeProject, focusedSession, tools],
+    [activeModelId, activeProject, focusedSession, handles, sideChatSeed, tools],
   );
-  const updateSideChatTabs = useCallback((nextTabsOrUpdater: SideChatTabsUpdater) => {
-    setSideChatSession((current) => {
-      const nextTabs =
-        typeof nextTabsOrUpdater === "function" ? nextTabsOrUpdater([current]) : nextTabsOrUpdater;
-      return nextTabs.at(-1) ?? current;
-    });
-  }, []);
-  const renameSideChat = useCallback((tabId: string, title: string) => {
-    setSideChatSession((current) => (current?.id === tabId ? { ...current, title } : current));
-  }, []);
+  const updateSideChatTabs = useCallback(
+    (nextTabsOrUpdater: SideChatTabsUpdater) => {
+      handles.updateDetachedSession(sideChatSeed, (current) => {
+        const nextTabs =
+          typeof nextTabsOrUpdater === "function"
+            ? nextTabsOrUpdater([current])
+            : nextTabsOrUpdater;
+        return nextTabs.at(-1) ?? current;
+      });
+    },
+    [handles, sideChatSeed],
+  );
+  const renameSideChat = useCallback(
+    (tabId: string, title: string) => {
+      handles.updateDetachedSession(sideChatSeed, (current) =>
+        current.id === tabId ? { ...current, title } : current,
+      );
+    },
+    [handles, sideChatSeed],
+  );
   const closeSideChat = useCallback(() => {
-    setSideChatSession(createSideChatSession(activeProject ?? null, focusedSession, activeModelId));
+    handles.removeDetachedSession(sideChatSeed.id);
+    setSideChatSeed(createSideChatSession(activeProject ?? null, focusedSession, activeModelId));
     tools.closeComputerTab("side-chat");
-  }, [activeModelId, activeProject, focusedSession, tools]);
+  }, [activeModelId, activeProject, focusedSession, handles, sideChatSeed.id, tools]);
   const closeComputerTab = useCallback(
     (closing: ComputerTab) => {
       if (closing === "side-chat") {
@@ -271,7 +253,7 @@ export function AgentBrowserPanel({
   );
   return (
     <aside
-      className={`${tools.computer.open ? "relative flex" : "hidden"} shrink-0 flex-col border-l border-(--border) bg-(--color-panel) shadow-[inset_1px_0_rgba(255,255,255,0.02)]`}
+      className={`${tools.computer.open ? "relative flex" : "hidden"} shrink-0 flex-col bg-(--color-panel) shadow-[var(--elev-side-panel)]`}
       ref={registerComputerAside}
       tabIndex={-1}
       onKeyDown={handleComputerKeyDown}
@@ -309,7 +291,7 @@ export function AgentBrowserPanel({
         onCompactSession={handles.compactFocusedSession}
         onNavigateBrowser={navigateBrowser}
         onOpenSideChat={openSideChat}
-        onOpenTerminal={() => handles.openTerminalPane()}
+        onOpenTerminal={openTerminalForFocusedSession}
         onRenameSideChat={renameSideChat}
         onUpdateSideChatTabs={updateSideChatTabs}
         sessions={sessions}
@@ -335,6 +317,7 @@ const TAB_LABELS: Record<ComputerTab, string> = {
   files: "Filesystem",
   diff: "Git",
   plan: "Plan",
+  inspector: "Inspector",
   terminal: "Terminal",
 };
 
@@ -375,6 +358,12 @@ const TAB_OPTIONS: Array<{
     description: "Project files and rendered previews",
     icon: FolderTree,
   },
+  {
+    tab: "inspector",
+    label: "Inspector",
+    description: "Per-turn tools, files, and context",
+    icon: ScanSearch,
+  },
   { tab: "terminal", label: "Terminal", description: "Project shell", icon: TerminalSquare },
 ];
 
@@ -411,7 +400,7 @@ function ComputerHeader({
           icon: TAB_OPTIONS.find((item) => item.tab === candidate)?.icon ?? PanelRight,
         };
   return (
-    <div className="relative flex h-10 shrink-0 items-center gap-1 border-b border-(--border)/85 bg-(--color-header) px-1.5 text-[length:var(--fs-sm)]">
+    <div className="relative flex h-10 shrink-0 items-center gap-1 border-b border-(--border) bg-(--color-header) px-1.5 text-[length:var(--fs-sm)]">
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden [scrollbar-width:thin]">
         {visibleTabs.map((openTab) => {
           const meta = tabMeta(openTab);
@@ -423,7 +412,7 @@ function ComputerHeader({
               className={`group inline-flex h-8 min-w-0 shrink-0 items-center gap-0.5 rounded-md ${
                 tab === openTab
                   ? "bg-(--color-surface-hover) text-(--fg)/85 hover:text-(--fg)"
-                  : "text-(--dim)/75 hover:bg-(--surface) hover:text-(--fg)/75"
+                  : "text-(--dim)/75 hover:bg-(--hover) hover:text-(--fg)/75"
               }`}
               title={meta.label}
             >
@@ -464,7 +453,7 @@ function ComputerHeader({
               className={`group inline-flex h-8 min-w-0 shrink-0 items-center gap-0.5 rounded-md ${
                 selected
                   ? "bg-(--color-surface-hover) text-(--fg)/85 hover:text-(--fg)"
-                  : "text-(--dim)/75 hover:bg-(--surface) hover:text-(--fg)/75"
+                  : "text-(--dim)/75 hover:bg-(--hover) hover:text-(--fg)/75"
               }`}
               title={shortcut ? `${label} (${shortcut})` : label}
             >
@@ -502,7 +491,7 @@ function ComputerHeader({
           className={`relative z-10 -my-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors ${
             tab === "tools"
               ? "bg-(--color-surface-hover) text-(--fg)/85 hover:text-(--fg)"
-              : "text-(--dim)/75 hover:bg-(--surface) hover:text-(--fg)/75"
+              : "text-(--dim)/75 hover:bg-(--hover) hover:text-(--fg)/75"
           }`}
           title="Show tools"
           aria-label="Show tools"

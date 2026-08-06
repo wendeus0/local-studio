@@ -14,11 +14,10 @@ import {
 import { useClickOutside } from "@/features/agent/hooks/use-click-outside";
 import { Archive, MoreIcon, Pin, PinOff, SquarePen, X } from "@/ui/icon-registry";
 import type { SessionPref } from "@/features/agent/messages/prefs";
-import { workspaceCommands } from "@/features/agent/workspace/commands";
 import { hrefWithOpenNonce, navigateToSessionHref } from "./helpers";
 
 const SESSION_MENU_CLASS =
-  "absolute right-0 top-6 isolate z-[999] min-w-[164px] rounded-lg border border-(--color-popover-border) bg-(--color-popover) p-1 shadow-[0_8px_28px_rgba(0,0,0,0.45)]";
+  "absolute right-0 top-6 isolate z-[999] min-w-[180px] rounded-2xl border border-(--color-popover-border) bg-(--color-popover) p-1.5 shadow-[0px_16px_32px_-8px_rgba(0,0,0,0.3),0px_0px_0px_0.5px_rgba(0,0,0,0.1)]";
 
 type SessionNavRowProps = {
   pref: SessionPref;
@@ -28,12 +27,15 @@ type SessionNavRowProps = {
   rowClass: string;
   renameRowClass?: string;
   href?: string;
-  onOpen?: () => void;
+  onOpen?: (href: string) => void;
   onPatchPref: (patch: SessionPref) => void;
   onArchive?: () => void;
   onRenameCommit?: (title: string) => void;
   onRememberTitle?: () => void;
   onDragStart: (event: DragEvent) => void;
+  onDragEnd?: () => void;
+  onDragOver?: (event: DragEvent) => void;
+  onDrop?: (event: DragEvent) => void;
   onContextMenu?: boolean;
   isRunning?: boolean;
   unseen?: boolean;
@@ -56,6 +58,9 @@ export function SessionNavRow({
   onRenameCommit,
   onRememberTitle,
   onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
   onContextMenu = false,
   isRunning = false,
   unseen = false,
@@ -106,6 +111,9 @@ export function SessionNavRow({
     <div
       className={`${rowClass} ${menuOpen ? "z-[900]" : "z-0"}`}
       onContextMenu={handleContextMenu}
+      onDragEnd={onDragEnd}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
     >
       <SessionOpenTarget
         age={age}
@@ -119,7 +127,31 @@ export function SessionNavRow({
         onRememberTitle={onRememberTitle}
         onStartRename={startRename}
       />
-      <div ref={menuRef} className="absolute right-1 top-1/2 z-20 -translate-y-1/2 shrink-0">
+      <div
+        ref={menuRef}
+        className="absolute right-1 top-1/2 z-20 flex -translate-y-1/2 shrink-0 items-center gap-0.5"
+      >
+        <button
+          type="button"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onPatchPref({ pinned: !pref.pinned });
+          }}
+          className={`inline-flex h-6 w-6 items-center justify-center rounded-md text-(--dim) transition-[opacity,color,background-color] hover:bg-(--hover) hover:text-(--fg) ${
+            menuOpen
+              ? "pointer-events-auto opacity-100"
+              : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100"
+          }`}
+          aria-label={pref.pinned ? "Unpin session" : "Pin session"}
+          title={pref.pinned ? "Unpin" : "Pin"}
+        >
+          {pref.pinned ? (
+            <PinOff className="pointer-events-none h-3.5 w-3.5" />
+          ) : (
+            <Pin className="pointer-events-none h-3.5 w-3.5" />
+          )}
+        </button>
         <button
           type="button"
           onClick={(event) => {
@@ -127,7 +159,7 @@ export function SessionNavRow({
             event.stopPropagation();
             setMenuOpen((value) => !value);
           }}
-          className={`inline-flex h-6 w-6 items-center justify-center rounded-md text-(--dim) transition-[opacity,color,background-color] hover:bg-(--color-surface-hover) hover:text-(--fg) ${
+          className={`inline-flex h-6 w-6 items-center justify-center rounded-md text-(--dim) transition-[opacity,color,background-color] hover:bg-(--hover) hover:text-(--fg) ${
             menuOpen
               ? "pointer-events-auto opacity-100"
               : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100"
@@ -209,7 +241,7 @@ function SessionOpenTarget({
   unseen: boolean;
   label: string;
   onDragStart: (event: DragEvent) => void;
-  onOpen?: () => void;
+  onOpen?: (href: string) => void;
   onRememberTitle?: () => void;
   onStartRename: () => void;
 }) {
@@ -236,14 +268,12 @@ function SessionOpenTarget({
           onRememberTitle?.();
           if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
           event.preventDefault();
-          if (onOpen && workspaceCommands().isBound()) {
-            onOpen();
-            return;
-          }
-          navigateToSessionHref(router, hrefWithOpenNonce(href));
+          const targetHref = hrefWithOpenNonce(href);
+          onOpen?.(targetHref);
+          navigateToSessionHref(router, targetHref);
         }}
         onDragStart={onDragStart}
-        className="flex min-w-0 flex-1 items-center gap-1"
+        className="flex min-w-0 flex-1 items-center gap-1 pr-14"
         {...openProps}
       >
         {content}
@@ -258,10 +288,10 @@ function SessionOpenTarget({
       onDragStart={onDragStart}
       onClick={() => {
         onRememberTitle?.();
-        onOpen?.();
+        onOpen?.("");
       }}
       aria-label={label}
-      className="flex min-w-0 flex-1 items-center gap-1 text-left"
+      className="flex min-w-0 flex-1 items-center gap-1 pr-14 text-left"
       {...openProps}
     >
       {content}
@@ -291,11 +321,11 @@ function SessionRowContent({
           title="Unseen activity"
         />
       ) : null}
-      <span className="min-w-0 flex-1 truncate text-[length:var(--fs-base)] font-normal leading-4 text-(--fg)/72 transition-colors group-hover:text-(--fg)/95">
+      <span className="min-w-0 flex-1 truncate text-[length:var(--fs-md)] font-normal leading-5">
         {label}
       </span>
       {age ? (
-        <span className="shrink-0 pl-1.5 pr-1 text-[length:var(--fs-md)] text-(--dim) transition-opacity group-hover:opacity-0">
+        <span className="shrink-0 pl-1.5 pr-1 text-[length:var(--fs-sm)] text-(--hl2) transition-opacity group-hover:opacity-0">
           {age}
         </span>
       ) : null}
@@ -328,11 +358,11 @@ function SessionOptionsMenu({
 
   return (
     <div className={SESSION_MENU_CLASS} role="menu">
-      <SessionMenuItem Icon={SquarePen} onClick={run(onRename)}>
-        Rename
-      </SessionMenuItem>
       <SessionMenuItem Icon={pref.pinned ? PinOff : Pin} onClick={run(onPin)}>
         {pref.pinned ? "Unpin" : "Pin"}
+      </SessionMenuItem>
+      <SessionMenuItem Icon={SquarePen} onClick={run(onRename)}>
+        Rename
       </SessionMenuItem>
       {onArchive ? (
         <SessionMenuItem Icon={Archive} onClick={run(onArchive)}>
@@ -367,13 +397,11 @@ function SessionMenuItem({
       type="button"
       role="menuitem"
       onClick={onClick}
-      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[length:var(--fs-md)] transition-colors ${
-        danger
-          ? "text-(--err) hover:bg-(--err)/10"
-          : "text-(--fg)/90 hover:bg-(--color-menu-hover) hover:text-(--fg)"
+      className={`flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left text-[length:var(--fs-base)] transition-colors ${
+        danger ? "text-(--err) hover:bg-(--err)/10" : "text-(--fg) hover:bg-(--color-menu-hover)"
       }`}
     >
-      <Icon className={`h-3.5 w-3.5 shrink-0 ${danger ? "" : "opacity-60"}`} strokeWidth={1.75} />
+      <Icon className={`h-4 w-4 shrink-0 ${danger ? "" : "opacity-70"}`} strokeWidth={1.5} />
       <span className="truncate">{children}</span>
     </button>
   );

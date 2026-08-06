@@ -1,6 +1,7 @@
 "use client";
 
-import { forwardRef, type SelectHTMLAttributes } from "react";
+import { forwardRef, useId, type SelectHTMLAttributes } from "react";
+import { useFormControlAttributes } from "./form-field-context";
 
 interface SelectOption {
   value: string;
@@ -14,10 +15,28 @@ interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 }
 
 const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select(
-  { label, options, placeholder, children, className = "", id, ...props },
+  {
+    label,
+    options,
+    placeholder,
+    children,
+    className = "",
+    id,
+    required,
+    "aria-describedby": ariaDescribedBy,
+    "aria-invalid": ariaInvalid,
+    ...props
+  },
   ref,
 ) {
-  const selectId = id || (label ? label.toLowerCase().replace(/\s+/g, "-") : undefined);
+  const generatedId = useId();
+  const field = useFormControlAttributes({
+    id,
+    required,
+    describedBy: ariaDescribedBy,
+    invalid: ariaInvalid,
+  });
+  const selectId = field.id ?? (label ? generatedId : undefined);
 
   return (
     <div>
@@ -32,7 +51,10 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select(
       <select
         ref={ref}
         id={selectId}
-        className={`h-9 w-full rounded-md border border-(--ui-separator) bg-(--ui-bg) px-3 text-[length:var(--fs-base)] text-(--ui-fg) transition-all focus:border-(--ui-info)/50 focus:outline-none focus:ring-1 focus:ring-(--ui-info)/20 ${className}`}
+        required={field.required}
+        aria-describedby={field.describedBy}
+        aria-invalid={field.invalid}
+        className={`h-9 w-full rounded-[10px] border border-(--ui-separator) bg-(--surface-3) px-3 text-[length:var(--fs-base)] text-(--ui-fg) transition-all focus:border-(--link)/70 focus:outline-none focus:ring-1 focus:ring-(--link)/25 ${className}`}
         {...props}
       >
         {placeholder && <option value="">{placeholder}</option>}
