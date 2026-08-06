@@ -3,8 +3,8 @@ import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import type { LogSession } from "../../../shared/contracts/observability";
-import type { UsageStats } from "../../../shared/contracts/usage";
+import type { LogSession } from "../../../controller/contracts/observability";
+import type { UsageStats } from "../../../controller/contracts/usage";
 import { loadSession, type SessionEvent } from "./sessions-store";
 
 type SessionFile = { path: string; mtimeMs: number; size: number };

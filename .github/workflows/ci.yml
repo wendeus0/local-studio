@@ -69,3 +69,9 @@ jobs:
       - name: Regression tests
         working-directory: ./frontend
         run: npm run test:regression
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+      - name: Validate package.json
+        working-directory: frontend
+        run: node scripts/validate-package-json.mjs
