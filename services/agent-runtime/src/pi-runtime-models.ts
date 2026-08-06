@@ -14,6 +14,7 @@ import { resolveModelVision } from "../../../controller/contracts/model-capabili
 
 const PROVIDER_ID = "local-studio";
 const USER_PI_PREFIX = "user-pi-";
+const MODELS_REQUEST_TIMEOUT_MS = 3_000;
 
 function userPiAgentDir(): string {
   // Prefer $HOME over os.homedir(): Node keeps them in sync but Bun's
@@ -212,7 +213,11 @@ async function fetchModelsFromController(
   const backendUrl = normalizeBackendUrl(controller.url);
   const headers: HeadersInit = { Accept: "application/json" };
   if (controller.apiKey) headers.Authorization = `Bearer ${controller.apiKey}`;
-  const response = await fetch(`${backendUrl}/v1/models`, { headers, cache: "no-store" });
+  const response = await fetch(`${backendUrl}/v1/models`, {
+    headers,
+    cache: "no-store",
+    signal: AbortSignal.timeout(MODELS_REQUEST_TIMEOUT_MS),
+  });
   if (!response.ok) {
     throw new Error(`${backendUrl}/v1/models failed with HTTP ${response.status}`);
   }
@@ -335,11 +340,8 @@ export async function refreshPiModels(
   const agentDir = path.join(dataDir, "pi-agent");
   await mkdir(agentDir, { recursive: true });
   await chmod(agentDir, 0o700).catch(() => undefined);
-  const persisted =
-    requestedControllers && requestedControllers.length > 0
-      ? requestedControllers
-      : await loadPersistedControllers(agentDir);
-  const controllers = mergeControllers(settings, persisted);
+  const persisted = await loadPersistedControllers(agentDir);
+  const controllers = mergeControllers(settings, persisted.concat(requestedControllers ?? []));
   await savePersistedControllers(agentDir, controllers);
   const { models, controllerModels } = await fetchModelsFromControllers(controllers);
 

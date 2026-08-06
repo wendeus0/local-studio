@@ -12,6 +12,7 @@ export interface ProviderConfig {
   id: string;
   name: string;
   base_url: string;
+  metrics_url?: string;
   api_key: string;
   enabled: boolean;
 }
