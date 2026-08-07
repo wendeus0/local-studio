@@ -1,13 +1,15 @@
 ---
 id: 03
 slug: security-middleware-auth-test
-status: ready
+status: done
 blockedBy: []
 executor: deepseek-v4-flash
 estimate: 3
 verify: "cd controller && bun test src/http/security-middleware.test.ts"
 risk: low
 linear:
+pr: https://github.com/wendeus0/local-studio/pull/9
+merged_sha: 973d14bd969c80a32153cf94565c10586ce9766d
 ---
 
 # Cobrir a autenticação por token do security-middleware com teste de unidade
