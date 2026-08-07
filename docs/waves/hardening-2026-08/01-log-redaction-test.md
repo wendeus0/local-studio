@@ -1,13 +1,15 @@
 ---
 id: 01
 slug: log-redaction-test
-status: ready
+status: done
 blockedBy: []
 executor: deepseek-v4-flash
 estimate: 2
 verify: "cd controller && bun test src/core/log-redaction.test.ts"
 risk: low
 linear:
+pr: https://github.com/wendeus0/local-studio/pull/7
+merged_sha: e62df5bd3eeb9aa0e83b77e93916d53290601d0b
 ---
 
 # Cobrir a redação de segredos em logs com teste de unidade

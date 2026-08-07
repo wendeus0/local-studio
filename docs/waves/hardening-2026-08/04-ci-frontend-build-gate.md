@@ -1,13 +1,15 @@
 ---
 id: 04
 slug: ci-frontend-build-gate
-status: ready
+status: done
 blockedBy: []
 executor: deepseek-v4-flash
 estimate: 2
 verify: "grep -q 'npm run build' .github/workflows/ci.yml && grep -q 'validate-package-json' .github/workflows/ci.yml && grep -q 'working-directory: frontend' .github/workflows/ci.yml && echo ci.yml-ok"
 risk: low
 linear:
+pr: https://github.com/wendeus0/local-studio/pull/10
+merged_sha: 31b9a42bbe99ad6843ffc4e9e794b28e97c7e556
 ---
 
 # Adicionar build do frontend e validate-package-json ao CI

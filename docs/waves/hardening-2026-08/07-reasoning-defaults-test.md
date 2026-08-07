@@ -1,13 +1,15 @@
 ---
 id: 07
 slug: reasoning-defaults-test
-status: ready
+status: done
 blockedBy: []
 executor: deepseek-v4-flash
 estimate: 3
 verify: "cd controller && bun test src/modules/proxy/reasoning.test.ts"
 risk: low
 linear:
+pr: https://github.com/wendeus0/local-studio/pull/12
+merged_sha: 677e5664aeeb2fd5e52c8ee602898d4026577a85
 ---
 
 # Travar o pareamento reasoning ↔ model-runtime-defaults com teste

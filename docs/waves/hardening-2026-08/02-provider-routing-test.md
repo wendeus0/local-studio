@@ -1,13 +1,15 @@
 ---
 id: 02
 slug: provider-routing-test
-status: ready
+status: done
 blockedBy: []
 executor: deepseek-v4-flash
 estimate: 2
 verify: "cd controller && bun test src/services/provider-routing.test.ts"
 risk: low
 linear:
+pr: https://github.com/wendeus0/local-studio/pull/8
+merged_sha: 378f1d81bcb3df28f36a0513c86fc52e9ba3718e
 ---
 
 # Cobrir a resolução provider/model com teste de unidade

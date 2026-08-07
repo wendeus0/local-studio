@@ -1,7 +1,7 @@
 ---
 id: 05
 slug: ci-hardening
-status: in_review
+status: done
 blockedBy: [04]
 executor: deepseek-v4-flash
 estimate: 2
@@ -9,6 +9,7 @@ verify: "grep -q '^permissions:' .github/workflows/ci.yml && grep -q 'cancel-in-
 risk: low
 pr: https://github.com/wendeus0/local-studio/pull/13
 linear:
+merged_sha: 6538f264a4afc6604d4c88dff42dc7f0edb18a7c
 ---
 
 # Endurecer o ci.yml: permissions mínimas, concurrency e cache

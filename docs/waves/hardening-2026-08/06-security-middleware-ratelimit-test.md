@@ -1,13 +1,15 @@
 ---
 id: 06
 slug: security-middleware-ratelimit-test
-status: ready
+status: done
 blockedBy: [03]
 executor: deepseek-v4-flash
 estimate: 3
 verify: "cd controller && bun test src/http/security-middleware.test.ts"
 risk: low
 linear:
+pr: https://github.com/wendeus0/local-studio/pull/11
+merged_sha: daaf12d0682c2f2ba5e9101adef640d6a98f691d
 ---
 
 # Cobrir rate limiting e extração de IP do security-middleware
